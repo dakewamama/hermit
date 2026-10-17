@@ -1,1 +1,537 @@
-fn main() {}
+mod chain;
+mod home;
+mod store;
+mod zcash;
+
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use home::{Home, Membership, Pairing};
+use std::fs;
+use std::path::PathBuf;
+use store::Store;
+use zc_kernel::assess::{assess, plan_merge, Assessment, HighWater, Resolution, Verdict};
+use zc_kernel::metadata::Labels;
+use zc_kernel::{seal, Body, Class, Device, DeviceKeys, Hash, Manifest, SectionRef};
+
+const EXIT_ANCHOR_MISMATCH: i32 = 23;
+
+#[derive(Parser)]
+#[command(name = "zc", about = "Zcash Continuity: portable, lineage-verified shielded wallet state")]
+struct Cli {
+    /// This device's local state directory.
+    #[arg(long, env = "ZC_HOME")]
+    home: PathBuf,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    #[command(subcommand)]
+    Device(DeviceCmd),
+    /// Create a capsule from a wallet directory.
+    Create {
+        #[arg(long)]
+        wallet: PathBuf,
+        #[arg(long)]
+        store: String,
+        /// Also carry the (still age-encrypted) mnemonic as a Secret section.
+        #[arg(long)]
+        include_secret: bool,
+    },
+    /// Print the pairing payload a new device needs to join (genesis + current head).
+    Pair,
+    /// Join a capsule using a pairing payload from an existing device.
+    Join {
+        #[arg(long)]
+        store: String,
+        pairing: PathBuf,
+    },
+    /// Record the wallet's current state as a new transition.
+    Snapshot {
+        #[arg(long)]
+        wallet: PathBuf,
+        #[arg(long)]
+        include_secret: bool,
+        #[arg(long, default_value = "snapshot")]
+        note: String,
+    },
+    /// Set (or with no value, delete) a label: tx notes, contacts, anything.
+    Label { key: String, value: Option<String> },
+    /// List labels.
+    Labels,
+    /// Verify lineage and chain anchor; report the verdict.
+    Status {
+        #[command(flatten)]
+        net: Net,
+    },
+    /// Materialize the capsule into a fresh wallet directory.
+    Restore {
+        #[arg(long)]
+        into: PathBuf,
+        /// Restore spend authority too (requires the wallet's age identity to use).
+        #[arg(long)]
+        with_secret: bool,
+        #[command(flatten)]
+        net: Net,
+    },
+    /// Exchange manifests and blobs with another store (another provider,
+    /// another device's replica). Both end up with the union.
+    Sync { other: String },
+    /// Reconcile a mergeable fork into a two-parent transition.
+    Merge,
+    /// Show the verified history.
+    Log,
+}
+
+#[derive(clap::Args)]
+struct Net {
+    /// lightwalletd/Zaino endpoint, e.g. https://testnet.zec.rocks:443
+    #[arg(long)]
+    server: Option<String>,
+    /// Skip chain verification (lineage is still verified).
+    #[arg(long)]
+    offline: bool,
+}
+
+#[derive(Subcommand)]
+enum DeviceCmd {
+    Init { #[arg(long)] name: String },
+    /// Print this device's public identity (share it to be added).
+    Show,
+    /// Authorize another device (authority transition; re-seals every section).
+    Add { device: PathBuf },
+    /// Revoke a device by name (authority transition).
+    Revoke { name: String },
+}
+
+fn main() {
+    let cli = Cli::parse();
+    if let Err(e) = run(cli) {
+        eprintln!("error: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+fn die(code: i32, msg: String) -> ! {
+    eprintln!("{msg}");
+    std::process::exit(code);
+}
+
+struct Ctx {
+    home: Home,
+    keys: DeviceKeys,
+    mem: Membership,
+    store: Store,
+}
+
+impl Ctx {
+    fn load(home: Home) -> Result<Ctx> {
+        let keys = home.keys()?;
+        let mem = home.membership()?;
+        let store = Store::open(&mem.store, mem.capsule_id)?;
+        Ok(Ctx { home, keys, mem, store })
+    }
+
+    fn assess(&self) -> Result<Assessment> {
+        let a = assess(self.store.list_manifests()?, self.mem.genesis, self.mem.hwm);
+        for (id, why) in &a.rejected {
+            println!("  ✗ rejected {}: {why}", id.short());
+        }
+        Ok(a)
+    }
+
+    /// The single verified head, or exit with the verdict's code.
+    fn head(&self) -> Result<(Assessment, Manifest)> {
+        let a = self.assess()?;
+        match a.verdict {
+            Verdict::Ok { head } => {
+                let m = a.valid[&head].clone();
+                Ok((a, m))
+            }
+            ref v => die(v.code(), describe(v)),
+        }
+    }
+
+    fn put_section(&self, name: &str, class: Class, plain: &[u8], devices: &[Device]) -> Result<SectionRef> {
+        let ct = seal::seal(plain, devices)?;
+        let blob = self.store.put_blob(&ct)?;
+        Ok(SectionRef {
+            name: name.into(),
+            class,
+            plain: Hash::of(b"ZcPlain_v1", plain),
+            blob,
+            len: plain.len() as u64,
+        })
+    }
+
+    fn read_section(&self, s: &SectionRef) -> Result<Vec<u8>> {
+        let pt = seal::open(&self.store.get_blob(s.blob)?, &self.keys.identity())?;
+        anyhow::ensure!(
+            Hash::of(b"ZcPlain_v1", &pt) == s.plain,
+            "section '{}' does not match its committed hash",
+            s.name
+        );
+        Ok(pt)
+    }
+
+    fn reseal_all(&self, sections: &[SectionRef], devices: &[Device]) -> Result<Vec<SectionRef>> {
+        sections
+            .iter()
+            .map(|s| self.put_section(&s.name, s.class, &self.read_section(s)?, devices))
+            .collect()
+    }
+
+    fn commit(&self, body: Body) -> Result<Manifest> {
+        let m = body.sign(&self.keys);
+        self.store.put_manifest(&m)?;
+        self.home.set_hwm(HighWater { seq: m.body.seq, id: m.id() })?;
+        println!(
+            "✓ S{} {} by {} — {}",
+            m.body.seq,
+            m.id().short(),
+            self.keys.name,
+            m.body.note
+        );
+        Ok(m)
+    }
+}
+
+fn describe(v: &Verdict) -> String {
+    match v {
+        Verdict::Ok { head } => format!("OK head {}", head.short()),
+        Verdict::Rollback { served, known } => format!(
+            "ROLLBACK DETECTED: store serves S{} ({}) but this device already accepted S{} ({})",
+            served.seq,
+            served.id.short(),
+            known.seq,
+            known.id.short()
+        ),
+        Verdict::ForkMergeable { a, b, base } => format!(
+            "FORK: heads {} and {} diverged from {} — mergeable, run `zc merge`",
+            a.short(),
+            b.short(),
+            base.short()
+        ),
+        Verdict::Conflict { a, b, reason } => format!(
+            "CONFLICT: heads {} and {} — {reason}\nmanual resolution required; nothing was written",
+            a.short(),
+            b.short()
+        ),
+        Verdict::Diverged { known } => format!(
+            "DIVERGED: store history does not extend S{} ({}) that this device accepted",
+            known.seq,
+            known.id.short()
+        ),
+        Verdict::Empty => "no valid state in store for this capsule".into(),
+    }
+}
+
+fn scratch(home: &Home) -> Result<PathBuf> {
+    let _ = home;
+    let p = std::env::temp_dir().join(format!("zc-{}", std::process::id()));
+    fs::create_dir_all(&p)?;
+    Ok(p)
+}
+
+fn wallet_sections(
+    ctx_put: &dyn Fn(&str, Class, &[u8]) -> Result<SectionRef>,
+    cap: &zcash::Capture,
+    include_secret: bool,
+) -> Result<Vec<SectionRef>> {
+    let mut out = vec![ctx_put(zcash::WALLET, Class::Progress, &cap.bundle)?];
+    if include_secret {
+        let m = cap
+            .mnemonic
+            .as_ref()
+            .context("wallet has no mnemonic to include")?;
+        out.push(ctx_put(zcash::SPENDKEY, Class::Secret, m.as_bytes())?);
+    }
+    Ok(out)
+}
+
+fn print_scan(cap: &zcash::Capture) {
+    println!(
+        "  anchor: {} height {} block {}",
+        cap.anchor.network,
+        cap.anchor.height,
+        &chain::display_hash(&cap.anchor.block_hash)[..16]
+    );
+    println!(
+        "  scan:   birthday {} → fully scanned {}",
+        cap.scan.birthday, cap.scan.fully_scanned
+    );
+}
+
+/// Check the anchor against the chain. Exits 23 on mismatch.
+fn verify_anchor(m: &Manifest, net: &Net) -> Result<Option<(chain::Chain, u32)>> {
+    let Some(anchor) = &m.body.anchor else { return Ok(None) };
+    if net.offline {
+        println!("  ! chain check skipped (--offline)");
+        return Ok(None);
+    }
+    let server = net
+        .server
+        .clone()
+        .unwrap_or_else(|| chain::default_server(&anchor.network).to_string());
+    let mut c = chain::Chain::connect(&server).with_context(|| format!("connecting to {server}"))?;
+    match c.check_anchor(anchor)? {
+        None => println!(
+            "  ✓ anchor {} @{} is on chain ({server})",
+            &chain::display_hash(&anchor.block_hash)[..16],
+            anchor.height
+        ),
+        Some(actual) => die(
+            EXIT_ANCHOR_MISMATCH,
+            format!(
+                "ANCHOR MISMATCH: capsule claims block {} at height {}, chain has {}",
+                chain::display_hash(&anchor.block_hash),
+                anchor.height,
+                chain::display_hash(&actual)
+            ),
+        ),
+    }
+    let tip = c.tip()?;
+    Ok(Some((c, tip)))
+}
+
+fn run(cli: Cli) -> Result<()> {
+    let home = Home::new(&cli.home)?;
+    match cli.cmd {
+        Cmd::Device(DeviceCmd::Init { name }) => {
+            let k = DeviceKeys::generate(&name);
+            home.save_keys(&k)?;
+            println!("{}", serde_json::to_string(&k.public())?);
+        }
+        Cmd::Device(DeviceCmd::Show) => {
+            println!("{}", serde_json::to_string(&home.keys()?.public())?);
+        }
+        Cmd::Create { wallet, store, include_secret } => {
+            let keys = home.keys()?;
+            let cap = zcash::capture(&wallet, &scratch(&home)?)?;
+            let devices = vec![keys.public()];
+            // The capsule id is only known after building genesis, so seal into
+            // a staging store first and move blobs once the id exists.
+            let staging = Store::open(&store, Hash([0; 32]))?;
+            let put = |name: &str, class: Class, pt: &[u8]| -> Result<SectionRef> {
+                let ct = seal::seal(pt, &devices)?;
+                Ok(SectionRef {
+                    name: name.into(),
+                    class,
+                    plain: Hash::of(b"ZcPlain_v1", pt),
+                    blob: staging.put_blob(&ct)?,
+                    len: pt.len() as u64,
+                })
+            };
+            let mut sections = wallet_sections(&put, &cap, include_secret)?;
+            sections.push(put(zcash::LABELS, Class::Metadata, &Labels::default().encode())?);
+            let body = Body::genesis("zcash/v1", &keys, devices.clone(), sections, Some(cap.anchor.clone()));
+            let g = body.sign(&keys);
+            let real = Store::open(&store, g.body.capsule_id)?;
+            for s in &g.body.sections {
+                real.put_blob(&staging.get_blob(s.blob)?)?;
+            }
+            fs::remove_dir_all(PathBuf::from(store.trim_start_matches("dir://")).join(Hash([0; 32]).hex()))?;
+            real.put_manifest(&g)?;
+            home.save_membership(&Membership {
+                capsule_id: g.body.capsule_id,
+                genesis: g.id(),
+                store: store.clone(),
+                hwm: Some(HighWater { seq: 0, id: g.id() }),
+            })?;
+            println!("✓ capsule {} created (S0 {})", g.body.capsule_id.short(), g.id().short());
+            print_scan(&cap);
+            for s in &g.body.sections {
+                println!("  section {:<15} {:?} {} bytes", s.name, s.class, s.len);
+            }
+            if !include_secret {
+                println!("  spend key NOT in capsule (view-only by default)");
+            }
+        }
+        Cmd::Pair => {
+            let ctx = Ctx::load(home)?;
+            let (_, head) = ctx.head()?;
+            let p = Pairing {
+                capsule_id: ctx.mem.capsule_id,
+                genesis: ctx.mem.genesis,
+                head: HighWater { seq: head.body.seq, id: head.id() },
+            };
+            println!("{}", serde_json::to_string(&p)?);
+        }
+        Cmd::Join { store, pairing } => {
+            let p: Pairing = serde_json::from_str(&fs::read_to_string(pairing)?)?;
+            home.keys()?;
+            home.save_membership(&Membership {
+                capsule_id: p.capsule_id,
+                genesis: p.genesis,
+                store,
+                hwm: Some(p.head),
+            })?;
+            println!("✓ joined capsule {} (pinned genesis {}, freshness floor S{} {})",
+                p.capsule_id.short(), p.genesis.short(), p.head.seq, p.head.id.short());
+        }
+        Cmd::Snapshot { wallet, include_secret, note } => {
+            let ctx = Ctx::load(home)?;
+            let (_, head) = ctx.head()?;
+            let cap = zcash::capture(&wallet, &scratch(&ctx.home)?)?;
+            if let Some(prev) = &head.body.anchor {
+                anyhow::ensure!(
+                    cap.anchor.height >= prev.height,
+                    "wallet is at height {} but capsule is at {}: snapshot would regress progress",
+                    cap.anchor.height,
+                    prev.height
+                );
+            }
+            let devices = head.body.devices.clone();
+            let put = |n: &str, c: Class, pt: &[u8]| ctx.put_section(n, c, pt, &devices);
+            let mut sections = wallet_sections(&put, &cap, include_secret)?;
+            for s in &head.body.sections {
+                if !sections.iter().any(|x| x.name == s.name) {
+                    sections.push(s.clone());
+                }
+            }
+            let body = Body::child(&[&head], &ctx.keys, devices, sections, Some(cap.anchor.clone()), &note);
+            ctx.commit(body)?;
+            print_scan(&cap);
+        }
+        Cmd::Label { key, value } => {
+            let ctx = Ctx::load(home)?;
+            let (_, head) = ctx.head()?;
+            let sref = head.body.section(zcash::LABELS).context("capsule has no labels section")?;
+            let mut labels = Labels::decode(&ctx.read_section(sref)?)?;
+            labels.set(&key, value.clone(), ctx.keys.public().sign_pk);
+            let new = ctx.put_section(zcash::LABELS, Class::Metadata, &labels.encode(), &head.body.devices)?;
+            let mut sections: Vec<_> = head.body.sections.iter().filter(|s| s.name != zcash::LABELS).cloned().collect();
+            sections.push(new);
+            let note = match &value {
+                Some(v) => format!("label {key} = {v}"),
+                None => format!("unlabel {key}"),
+            };
+            let body = Body::child(&[&head], &ctx.keys, head.body.devices.clone(), sections, head.body.anchor.clone(), &note);
+            ctx.commit(body)?;
+        }
+        Cmd::Labels => {
+            let ctx = Ctx::load(home)?;
+            let (_, head) = ctx.head()?;
+            let sref = head.body.section(zcash::LABELS).context("capsule has no labels section")?;
+            for (k, v) in Labels::decode(&ctx.read_section(sref)?)?.live() {
+                println!("{k}\t{v}");
+            }
+        }
+        Cmd::Device(DeviceCmd::Add { device }) => {
+            let ctx = Ctx::load(home)?;
+            let (_, head) = ctx.head()?;
+            let d: Device = serde_json::from_str(&fs::read_to_string(device)?)?;
+            anyhow::ensure!(!head.body.devices.iter().any(|x| x.sign_pk == d.sign_pk), "device already authorized");
+            let mut devices = head.body.devices.clone();
+            devices.push(d.clone());
+            let sections = ctx.reseal_all(&head.body.sections, &devices)?;
+            let body = Body::child(&[&head], &ctx.keys, devices, sections, head.body.anchor.clone(), &format!("authorize device {}", d.name));
+            ctx.commit(body)?;
+        }
+        Cmd::Device(DeviceCmd::Revoke { name }) => {
+            let ctx = Ctx::load(home)?;
+            let (_, head) = ctx.head()?;
+            let devices: Vec<Device> = head.body.devices.iter().filter(|d| d.name != name).cloned().collect();
+            anyhow::ensure!(devices.len() < head.body.devices.len(), "no device named {name}");
+            anyhow::ensure!(!devices.is_empty(), "cannot revoke the last device");
+            let sections = ctx.reseal_all(&head.body.sections, &devices)?;
+            let body = Body::child(&[&head], &ctx.keys, devices, sections, head.body.anchor.clone(), &format!("revoke device {name}"));
+            ctx.commit(body)?;
+        }
+        Cmd::Status { net } => {
+            let ctx = Ctx::load(home)?;
+            let a = ctx.assess()?;
+            let Verdict::Ok { head } = a.verdict else { die(a.verdict.code(), describe(&a.verdict)) };
+            let m = &a.valid[&head];
+            println!("✓ lineage OK: S{} {} by {} ({} manifests verified)", m.body.seq, head.short(), m.author_name(), a.valid.len());
+            if let Some((_, tip)) = verify_anchor(m, &net)? {
+                let h = m.body.anchor.as_ref().map(|x| x.height).unwrap_or(0);
+                println!("  chain tip {tip}; capsule is {} blocks behind", tip.saturating_sub(h));
+            }
+            ctx.home.set_hwm(HighWater { seq: m.body.seq, id: head })?;
+        }
+        Cmd::Restore { into, with_secret, net } => {
+            let ctx = Ctx::load(home)?;
+            let (_, head) = ctx.head()?;
+            println!("✓ lineage OK: S{} {} by {}", head.body.seq, head.id().short(), head.author_name());
+            let chain = verify_anchor(&head, &net)?;
+            let wref = head.body.section(zcash::WALLET).context("capsule has no wallet section")?;
+            let bundle = zcash::decode_bundle(&ctx.read_section(wref)?)?;
+            let mnemonic = if with_secret {
+                let s = head
+                    .body
+                    .section(zcash::SPENDKEY)
+                    .context("capsule carries no spend key (created without --include-secret)")?;
+                Some(String::from_utf8(ctx.read_section(s)?)?)
+            } else {
+                None
+            };
+            let scan = zcash::restore(&bundle, mnemonic.as_deref(), &into)?;
+            println!("✓ wallet restored to {}", into.display());
+            println!(
+                "  spend authority: {}",
+                if mnemonic.is_some() { "restored (still locked to the wallet's age identity)" } else { "NOT restored — view-only" }
+            );
+            if let Some((_, tip)) = chain {
+                let delta = tip.saturating_sub(scan.fully_scanned);
+                let full = tip.saturating_sub(scan.birthday);
+                println!("  rescan needed: {delta} blocks (vs {full} from birthday {}) — {:.1}% saved",
+                    scan.birthday,
+                    if full > 0 { 100.0 * (full - delta.min(full)) as f64 / full as f64 } else { 0.0 });
+            }
+            ctx.home.set_hwm(HighWater { seq: head.body.seq, id: head.id() })?;
+        }
+        Cmd::Sync { other } => {
+            let ctx = Ctx::load(home)?;
+            let theirs = Store::open(&other, ctx.mem.capsule_id)?;
+            let (m_in, b_in) = ctx.store.pull_from(&theirs)?;
+            let (m_out, b_out) = theirs.pull_from(&ctx.store)?;
+            println!("✓ synced with {other}: ←{m_in} manifests/{b_in} blobs, →{m_out} manifests/{b_out} blobs");
+            let a = ctx.assess()?;
+            println!("  verdict: {}", describe(&a.verdict));
+        }
+        Cmd::Merge => {
+            let ctx = Ctx::load(home)?;
+            let a = ctx.assess()?;
+            let Verdict::ForkMergeable { a: ha, b: hb, base } = a.verdict else {
+                die(a.verdict.code(), describe(&a.verdict))
+            };
+            let plan = plan_merge(&a.valid, ha, hb, base);
+            let devices = a.valid[&plan.devices_from].body.devices.clone();
+            let mut sections = Vec::new();
+            for (name, res) in plan.sections {
+                let s = match res {
+                    Resolution::Take(s) => {
+                        let pt = ctx.read_section(&s)?;
+                        ctx.put_section(&name, s.class, &pt, &devices)?
+                    }
+                    Resolution::MergeMetadata { a: x, b: y } => {
+                        let merged = Labels::decode(&ctx.read_section(&x)?)?.merge(&Labels::decode(&ctx.read_section(&y)?)?);
+                        println!("  merged {name}: {} entries", merged.live().count());
+                        ctx.put_section(&name, Class::Metadata, &merged.encode(), &devices)?
+                    }
+                };
+                sections.push(s);
+            }
+            let anchor = a.valid[&plan.anchor_from].body.anchor.clone();
+            let parents = [&a.valid[&ha], &a.valid[&hb]];
+            let body = Body::child(&parents, &ctx.keys, devices, sections, anchor, &format!("merge {} + {}", ha.short(), hb.short()));
+            println!("MERGED");
+            ctx.commit(body)?;
+        }
+        Cmd::Log => {
+            let ctx = Ctx::load(home)?;
+            let a = ctx.assess()?;
+            let mut ms: Vec<_> = a.valid.values().collect();
+            ms.sort_by_key(|m| (m.body.seq, m.id()));
+            for m in ms {
+                let parents: Vec<String> = m.body.parents.iter().map(|p| p.short()).collect();
+                let h = m.body.anchor.as_ref().map(|x| x.height.to_string()).unwrap_or("-".into());
+                println!("S{:<3} {}  ← [{}]  by {:<8} @{:<8} {}", m.body.seq, m.id().short(), parents.join(","), m.author_name(), h, m.body.note);
+            }
+            println!("verdict: {}", describe(&a.verdict));
+        }
+    }
+    Ok(())
+}
