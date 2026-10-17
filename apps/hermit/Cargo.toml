@@ -22,3 +22,6 @@ tonic = { version = "0.14", features = ["tls-webpki-roots", "tls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818", default-features = false, features = ["lightwalletd-tonic-tls-webpki-roots"] }
 
+[dev-dependencies]
+cddl-cat = "0.7.1"
+minicbor = "2"

@@ -93,6 +93,10 @@ expect 21 "$HERMIT" --home B status --offline
 "$HERMIT" --home B sync "$RELAY"
 [[ $("$HERMIT" --home A labels | wc -l) -eq 3 ]] && echo "✓ both devices' labels kept"
 
+step "export the verified head as ZeWIF and check it against the schema"
+"$HERMIT" --home A zewif --out export.zewif
+cargo run -q --manifest-path "$ROOT/Cargo.toml" -p hermit --example zewif_conformance -- export.zewif
+
 step "wallet synced from a lying server: refused at signing"
 cp -r walletA evil
 sqlite3 evil/data.sqlite \
