@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use store::Store;
 use hermit_kernel::assess::{assess, plan_merge, Assessment, HighWater, Resolution, Verdict};
 use hermit_kernel::metadata::Labels;
-use hermit_kernel::{seal, Body, Class, Device, DeviceKeys, Hash, Manifest, SectionRef};
+use hermit_kernel::{seal, Anchor, Body, Class, Device, DeviceKeys, Hash, Manifest, SectionRef};
 
 const EXIT_ANCHOR_MISMATCH: i32 = 23;
 
@@ -55,6 +55,8 @@ enum Cmd {
         include_secret: bool,
         #[arg(long, default_value = "snapshot")]
         note: String,
+        #[command(flatten)]
+        net: Net,
     },
     /// Set (or with no value, delete) a label: tx notes, contacts, anything.
     Label { key: String, value: Option<String> },
@@ -264,8 +266,8 @@ fn print_scan(cap: &zcash::Capture) {
 }
 
 /// Check the anchor against the chain. Exits 23 on mismatch.
-fn verify_anchor(m: &Manifest, net: &Net) -> Result<Option<(chain::Chain, u32)>> {
-    let Some(anchor) = &m.body.anchor else { return Ok(None) };
+fn verify_anchor(anchor: Option<&Anchor>, net: &Net) -> Result<Option<(chain::Chain, u32)>> {
+    let Some(anchor) = anchor else { return Ok(None) };
     if net.offline {
         println!("  ! chain check skipped (--offline)");
         return Ok(None);
@@ -284,7 +286,7 @@ fn verify_anchor(m: &Manifest, net: &Net) -> Result<Option<(chain::Chain, u32)>>
         Some(actual) => die(
             EXIT_ANCHOR_MISMATCH,
             format!(
-                "ANCHOR MISMATCH: capsule claims block {} at height {}, chain has {}",
+                "ANCHOR MISMATCH: block {} at height {} is not on chain (chain has {})",
                 chain::display_hash(&anchor.block_hash),
                 anchor.height,
                 chain::display_hash(&actual)
@@ -370,10 +372,12 @@ fn run(cli: Cli) -> Result<()> {
             println!("✓ joined capsule {} (pinned genesis {}, freshness floor S{} {})",
                 p.capsule_id.short(), p.genesis.short(), p.head.seq, p.head.id.short());
         }
-        Cmd::Snapshot { wallet, include_secret, note } => {
+        Cmd::Snapshot { wallet, include_secret, note, net } => {
             let ctx = Ctx::load(home)?;
             let (_, head) = ctx.head()?;
             let cap = zcash::capture(&wallet, &scratch(&ctx.home)?)?;
+            // Never sign state built on a chain that doesn't exist.
+            verify_anchor(Some(&cap.anchor), &net)?;
             if let Some(prev) = &head.body.anchor {
                 anyhow::ensure!(
                     cap.anchor.height >= prev.height,
@@ -445,7 +449,7 @@ fn run(cli: Cli) -> Result<()> {
             let Verdict::Ok { head } = a.verdict else { die(a.verdict.code(), describe(&a.verdict)) };
             let m = &a.valid[&head];
             println!("✓ lineage OK: S{} {} by {} ({} manifests verified)", m.body.seq, head.short(), m.author_name(), a.valid.len());
-            if let Some((_, tip)) = verify_anchor(m, &net)? {
+            if let Some((_, tip)) = verify_anchor(m.body.anchor.as_ref(), &net)? {
                 let h = m.body.anchor.as_ref().map(|x| x.height).unwrap_or(0);
                 println!("  chain tip {tip}; capsule is {} blocks behind", tip.saturating_sub(h));
             }
@@ -455,7 +459,7 @@ fn run(cli: Cli) -> Result<()> {
             let ctx = Ctx::load(home)?;
             let (_, head) = ctx.head()?;
             println!("✓ lineage OK: S{} {} by {}", head.body.seq, head.id().short(), head.author_name());
-            let chain = verify_anchor(&head, &net)?;
+            let chain = verify_anchor(head.body.anchor.as_ref(), &net)?;
             let wref = head.body.section(zcash::WALLET).context("capsule has no wallet section")?;
             let bundle = zcash::decode_bundle(&ctx.read_section(wref)?)?;
             let mnemonic = if with_secret {
