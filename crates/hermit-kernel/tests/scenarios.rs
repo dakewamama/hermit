@@ -243,3 +243,73 @@ fn signature_evidence_is_required() {
     let r = assess(vec![w.g.clone(), s1], w.g.id(), None);
     assert_eq!(r.rejected.len(), 1);
 }
+
+#[test]
+fn conflict_is_settled_only_by_a_device_both_branches_trust() {
+    let w = world();
+    let c = DeviceKeys::generate("tablet");
+    let s1 = step(&w.g, &w.a, "db@110", "{}", 110);
+    let mut add = s1.body.devices.clone();
+    add.push(c.public());
+    let xa = Body::child(
+        &[&s1],
+        &w.a,
+        add,
+        s1.body.sections.clone(),
+        s1.body.anchor.clone(),
+        "add tablet",
+    )
+    .sign(&w.a);
+    let xb = Body::child(
+        &[&s1],
+        &w.b,
+        vec![w.b.public()],
+        s1.body.sections.clone(),
+        s1.body.anchor.clone(),
+        "revoke laptop",
+    )
+    .sign(&w.b);
+
+    // Laptop was revoked on xb, so its resolution has no standing there.
+    let by_laptop = Body::child(
+        &[&xa, &xb],
+        &w.a,
+        xa.body.devices.clone(),
+        xa.body.sections.clone(),
+        xa.body.anchor.clone(),
+        "resolve",
+    )
+    .sign(&w.a);
+    let r = assess(
+        vec![w.g.clone(), s1.clone(), xa.clone(), xb.clone(), by_laptop],
+        w.g.id(),
+        None,
+    );
+    assert!(
+        matches!(r.verdict, Verdict::Conflict { .. }),
+        "{:?}",
+        r.verdict
+    );
+
+    // Phone is trusted on both branches; keeping xb's authority settles it.
+    let by_phone = Body::child(
+        &[&xb, &xa],
+        &w.b,
+        xb.body.devices.clone(),
+        xb.body.sections.clone(),
+        xb.body.anchor.clone(),
+        "resolve",
+    )
+    .sign(&w.b);
+    let r = assess(
+        vec![w.g.clone(), s1, xa, xb, by_phone.clone()],
+        w.g.id(),
+        None,
+    );
+    assert_eq!(
+        r.verdict,
+        Verdict::Ok {
+            head: by_phone.id()
+        }
+    );
+}

@@ -6,7 +6,9 @@ mod zewif_export;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use hermit_kernel::assess::{assess, plan_merge, Assessment, HighWater, Resolution, Verdict};
+use hermit_kernel::assess::{
+    assess, base_of, plan_merge, Assessment, HighWater, MergePlan, Resolution, Verdict,
+};
 use hermit_kernel::metadata::Labels;
 use hermit_kernel::{seal, Anchor, Body, Class, Device, DeviceKeys, Hash, Manifest, SectionRef};
 use home::{Home, Membership, Pairing};
@@ -94,6 +96,13 @@ enum Cmd {
     Merge,
     /// Show the verified history.
     Log,
+    /// Settle a conflict by choosing whose authority (device set) survives.
+    /// Labels and progress are still reconciled as in a merge.
+    Resolve {
+        /// Prefix of the head whose device set to keep.
+        #[arg(long)]
+        keep: String,
+    },
     /// Export the verified head as a view-only ZeWIF document.
     Zewif {
         #[arg(long)]
@@ -255,6 +264,40 @@ impl Ctx {
             .iter()
             .map(|s| self.put_section(&s.name, s.class, &self.read_section(s)?, devices))
             .collect()
+    }
+
+    /// A two-parent successor: sections reconciled per `plan`, every section
+    /// re-sealed to `devices`, and the higher chain anchor of the two.
+    fn merge_body(
+        &self,
+        a: &Assessment,
+        first: Hash,
+        second: Hash,
+        plan: MergePlan,
+        devices: Vec<Device>,
+        note: &str,
+    ) -> Result<Body> {
+        let mut sections = Vec::new();
+        for (name, res) in plan.sections {
+            let s = match res {
+                Resolution::Take(s) => {
+                    let pt = self.read_section(&s)?;
+                    self.put_section(&name, s.class, &pt, &devices)?
+                }
+                Resolution::MergeMetadata { a: x, b: y } => {
+                    let merged = Labels::decode(&self.read_section(&x)?)?
+                        .merge(&Labels::decode(&self.read_section(&y)?)?);
+                    println!("  merged {name}: {} entries", merged.live().count());
+                    self.put_section(&name, Class::Metadata, &merged.encode(), &devices)?
+                }
+            };
+            sections.push(s);
+        }
+        let anchor = a.valid[&plan.anchor_from].body.anchor.clone();
+        let parents = [&a.valid[&first], &a.valid[&second]];
+        Ok(Body::child(
+            &parents, &self.keys, devices, sections, anchor, note,
+        ))
     }
 
     fn commit(&self, body: Body) -> Result<Manifest> {
@@ -718,33 +761,53 @@ fn run(cli: Cli) -> Result<()> {
             };
             let plan = plan_merge(&a.valid, ha, hb, base);
             let devices = a.valid[&plan.devices_from].body.devices.clone();
-            let mut sections = Vec::new();
-            for (name, res) in plan.sections {
-                let s = match res {
-                    Resolution::Take(s) => {
-                        let pt = ctx.read_section(&s)?;
-                        ctx.put_section(&name, s.class, &pt, &devices)?
-                    }
-                    Resolution::MergeMetadata { a: x, b: y } => {
-                        let merged = Labels::decode(&ctx.read_section(&x)?)?
-                            .merge(&Labels::decode(&ctx.read_section(&y)?)?);
-                        println!("  merged {name}: {} entries", merged.live().count());
-                        ctx.put_section(&name, Class::Metadata, &merged.encode(), &devices)?
-                    }
-                };
-                sections.push(s);
-            }
-            let anchor = a.valid[&plan.anchor_from].body.anchor.clone();
-            let parents = [&a.valid[&ha], &a.valid[&hb]];
-            let body = Body::child(
-                &parents,
-                &ctx.keys,
-                devices,
-                sections,
-                anchor,
-                &format!("merge {} + {}", ha.short(), hb.short()),
-            );
+            let note = format!("merge {} + {}", ha.short(), hb.short());
+            let body = ctx.merge_body(&a, ha, hb, plan, devices, &note)?;
             println!("MERGED");
+            ctx.commit(body)?;
+        }
+        Cmd::Resolve { keep } => {
+            let ctx = Ctx::load(home, local)?;
+            let a = ctx.assess()?;
+            let Verdict::Conflict {
+                a: ha,
+                b: hb,
+                ref reason,
+            } = a.verdict
+            else {
+                die(a.verdict.code(), describe(&a.verdict))
+            };
+            let (kept, other) = match (ha.hex().starts_with(&keep), hb.hex().starts_with(&keep)) {
+                (true, false) => (ha, hb),
+                (false, true) => (hb, ha),
+                _ => anyhow::bail!(
+                    "--keep must be a prefix of exactly one head: {} or {}",
+                    ha.short(),
+                    hb.short()
+                ),
+            };
+            let me = ctx.keys.public().sign_pk;
+            for h in [kept, other] {
+                anyhow::ensure!(
+                    a.valid[&h].body.devices.iter().any(|d| d.sign_pk == me),
+                    "this device is not authorized on branch {}; resolve from a device both branches trust",
+                    h.short()
+                );
+            }
+            let base = base_of(&a.valid, ha, hb).context("heads share no ancestor")?;
+            let plan = plan_merge(&a.valid, ha, hb, base);
+            let devices = a.valid[&kept].body.devices.clone();
+            println!("  conflict was: {reason}");
+            println!(
+                "  keeping authority from {} ({}); discarding {} ({})",
+                kept.short(),
+                a.valid[&kept].body.note,
+                other.short(),
+                a.valid[&other].body.note
+            );
+            let note = format!("resolve: keep {} over {}", kept.short(), other.short());
+            let body = ctx.merge_body(&a, kept, other, plan, devices, &note)?;
+            println!("RESOLVED");
             ctx.commit(body)?;
         }
         Cmd::Zewif { out } => {
