@@ -142,7 +142,7 @@ pub fn describe(bytes: &[u8]) -> Result<String> {
                 "\n    account '{}' birthday {} ufvk {}… scanned ranges {}",
                 a.name(),
                 a.birthday_height().map(u32::from).unwrap_or(0),
-                &k.encoding()[..20],
+                k.encoding().chars().take(20).collect::<String>(),
                 a.scanned_ranges().len()
             );
         }
