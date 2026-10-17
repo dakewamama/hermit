@@ -1,6 +1,6 @@
 //! A deliberately dumb relay: it stores whatever it is given and lists
-//! whatever it has. Clients trust none of it. For demonstrations it can be
-//! switched at runtime into hostile modes:
+//! whatever it has. Clients trust none of it. Started with --demo-admin it
+//! can be switched at runtime into hostile modes:
 //!
 //!   honest   serve everything (default)
 //!   freeze   keep serving the manifest set as of the switch; accept and
@@ -30,6 +30,10 @@ struct Args {
     listen: String,
     #[arg(long, default_value = "relay-data")]
     data: PathBuf,
+    /// Expose the unauthenticated /admin/mode endpoint that makes the relay
+    /// misbehave on request. For demonstrations only.
+    #[arg(long)]
+    demo_admin: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,7 +56,9 @@ fn valid_name(s: &str) -> bool {
 
 impl Relay {
     fn path(&self, cap: &str, kind: &str, name: Option<&str>) -> Result<PathBuf, StatusCode> {
-        if !valid_name(cap) || name.is_some_and(|n| !valid_name(n)) {
+        // Every path component is checked here, the single place paths are
+        // built, so no handler can reach outside <data>/<cap>/{m,b}.
+        if !valid_name(cap) || !matches!(kind, "m" | "b") || name.is_some_and(|n| !valid_name(n)) {
             return Err(StatusCode::BAD_REQUEST);
         }
         let mut p = self.data.join(cap).join(kind);
@@ -124,9 +130,6 @@ async fn store(
     Path((cap, kind, name)): Path<(String, String, String)>,
     body: Bytes,
 ) -> Result<StatusCode, StatusCode> {
-    if kind != "m" && kind != "b" {
-        return Err(StatusCode::NOT_FOUND);
-    }
     let p = r.path(&cap, &kind, Some(&name))?;
     if matches!(r.mode(), Mode::Freeze(_)) {
         // Pretend to accept; a censoring provider looks healthy to the writer.
@@ -162,10 +165,14 @@ async fn main() -> anyhow::Result<()> {
         data: args.data,
         mode: Arc::new(Mutex::new(Mode::Honest)),
     };
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/c/{cap}/{kind}", get(list))
-        .route("/c/{cap}/{kind}/{name}", get(fetch).put(store))
-        .route("/admin/mode", post(set_mode))
+        .route("/c/{cap}/{kind}/{name}", get(fetch).put(store));
+    if args.demo_admin {
+        println!("WARNING: /admin/mode is enabled; anyone who can reach this relay can make it misbehave");
+        app = app.route("/admin/mode", post(set_mode));
+    }
+    let app = app
         // A wallet section is a whole data.sqlite: tens of MB is normal.
         .layer(DefaultBodyLimit::max(MAX_BLOB))
         .with_state(relay);
@@ -173,4 +180,35 @@ async fn main() -> anyhow::Result<()> {
     println!("hermit-relay listening on http://{}", args.listen);
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn relay() -> Relay {
+        Relay {
+            data: PathBuf::from("/srv/relay"),
+            mode: Arc::new(Mutex::new(Mode::Honest)),
+        }
+    }
+
+    #[test]
+    fn paths_cannot_leave_the_capsule() {
+        let r = relay();
+        let cap = "c".repeat(64);
+        let name = "a".repeat(64);
+        for kind in ["..", ".", "", "m/..", "x"] {
+            assert!(r.path(&cap, kind, None).is_err(), "kind {kind:?}");
+            assert!(r.path(&cap, kind, Some(&name)).is_err(), "kind {kind:?}");
+        }
+        for bad in ["..", "../etc", &"a".repeat(63), &"g".repeat(64)] {
+            assert!(r.path(bad, "m", None).is_err(), "cap {bad:?}");
+            assert!(r.path(&cap, "b", Some(bad)).is_err(), "name {bad:?}");
+        }
+        assert_eq!(
+            r.path(&cap, "b", Some(&name)).unwrap(),
+            PathBuf::from("/srv/relay").join(&cap).join("b").join(&name)
+        );
+    }
 }

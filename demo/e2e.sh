@@ -17,7 +17,7 @@ PORT=${PORT:-8787}
 RELAY=http://127.0.0.1:$PORT
 WORK=$(mktemp -d)
 cd "$WORK"
-"$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data >relay.log 2>&1 &
+"$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data --demo-admin >relay.log 2>&1 &
 RELAY_PID=$!
 trap 'kill $RELAY_PID 2>/dev/null; echo "workdir: $WORK"' EXIT
 relay_mode() { curl -sf -X POST "$RELAY/admin/mode" -d "$1" >/dev/null && echo "(relay is now: $1)"; }

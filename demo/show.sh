@@ -18,7 +18,7 @@ PACE=${PACE:-1}
 
 WORK=$(mktemp -d)
 cd "$WORK"
-"$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data >relay.log 2>&1 &
+"$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data --demo-admin >relay.log 2>&1 &
 RELAY_PID=$!
 trap 'kill $RELAY_PID 2>/dev/null' EXIT
 sleep 1
