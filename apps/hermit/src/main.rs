@@ -250,7 +250,10 @@ impl Ctx {
     }
 
     fn read_section(&self, s: &SectionRef) -> Result<Vec<u8>> {
-        let pt = seal::open(&self.store.get_blob(s.blob)?, &self.keys.identity())?;
+        let pt = seal::open(
+            &self.store.get_blob(s.blob, store::sealed_bound(s.len))?,
+            &self.keys.identity(),
+        )?;
         anyhow::ensure!(
             Hash::of(b"ZcPlain_v1", &pt) == s.plain,
             "section '{}' does not match its committed hash",

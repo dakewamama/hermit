@@ -24,6 +24,17 @@ pub struct Store {
 const MANIFESTS: &str = "m";
 const BLOBS: &str = "b";
 
+/// Manifests are a few KB; anything near this is hostile.
+const MAX_MANIFEST: u64 = 1 << 20;
+/// Same ceiling the relay enforces on uploads.
+const MAX_BLOB: u64 = 256 << 20;
+
+/// Upper bound on an age ciphertext of `plain_len` bytes: 16 bytes of tag
+/// per 64 KiB chunk plus a header that grows with the recipient count.
+pub fn sealed_bound(plain_len: u64) -> u64 {
+    plain_len + (plain_len / 65536 + 1) * 16 + (1 << 20)
+}
+
 impl Store {
     pub fn open(spec: &str, capsule: Hash) -> Result<Store> {
         let backend = if spec.starts_with("http://") || spec.starts_with("https://") {
@@ -61,23 +72,30 @@ impl Store {
         }
     }
 
-    fn get(&self, kind: &str, name: &str) -> Result<Option<Vec<u8>>> {
-        match &self.backend {
-            Backend::Dir(root) => match fs::read(root.join(kind).join(name)) {
-                Ok(b) => Ok(Some(b)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(e) => Err(e.into()),
+    /// Read at most `max` bytes; a provider serving more is refused rather
+    /// than allowed to exhaust our memory.
+    fn get(&self, kind: &str, name: &str, max: u64) -> Result<Option<Vec<u8>>> {
+        let reader: Box<dyn Read> = match &self.backend {
+            Backend::Dir(root) => match fs::File::open(root.join(kind).join(name)) {
+                Ok(f) => Box::new(f),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(e.into()),
             },
             Backend::Http(base) => match ureq::get(&format!("{base}/{kind}/{name}")).call() {
-                Ok(resp) => {
-                    let mut out = Vec::new();
-                    resp.into_reader().read_to_end(&mut out)?;
-                    Ok(Some(out))
-                }
-                Err(ureq::Error::Status(404, _)) => Ok(None),
-                Err(e) => Err(e.into()),
+                Ok(resp) => resp.into_reader(),
+                Err(ureq::Error::Status(404, _)) => return Ok(None),
+                Err(e) => return Err(e.into()),
             },
+        };
+        let mut out = Vec::new();
+        reader.take(max + 1).read_to_end(&mut out)?;
+        if out.len() as u64 > max {
+            bail!(
+                "provider served more than {max} bytes for {kind}/{}",
+                &name[..8.min(name.len())]
+            );
         }
+        Ok(Some(out))
     }
 
     fn put(&self, kind: &str, name: &str, bytes: &[u8]) -> Result<()> {
@@ -104,8 +122,10 @@ impl Store {
         Ok(h)
     }
 
-    pub fn get_blob(&self, h: Hash) -> Result<Vec<u8>> {
-        let bytes = self.get(BLOBS, &h.hex())?.with_context(|| {
+    /// `max` is what the caller expects the ciphertext to be at most; see
+    /// [`sealed_bound`].
+    pub fn get_blob(&self, h: Hash, max: u64) -> Result<Vec<u8>> {
+        let bytes = self.get(BLOBS, &h.hex(), max)?.with_context(|| {
             format!(
                 "no verified copy of blob {} (provider lacks it or served corrupted content)",
                 h.short()
@@ -132,7 +152,7 @@ impl Store {
     pub fn list_manifests(&self) -> Result<Vec<Manifest>> {
         let mut out = Vec::new();
         for name in self.list(MANIFESTS)? {
-            if let Some(bytes) = self.get(MANIFESTS, &name)? {
+            if let Some(bytes) = self.get(MANIFESTS, &name, MAX_MANIFEST)? {
                 if let Ok(m) = from_cbor::<Manifest>(&bytes) {
                     out.push(m);
                 }
@@ -152,7 +172,12 @@ impl Store {
                 if have.contains(&name) {
                     continue;
                 }
-                let Some(bytes) = other.get(kind, &name)? else {
+                let max = if kind == BLOBS {
+                    MAX_BLOB
+                } else {
+                    MAX_MANIFEST
+                };
+                let Some(bytes) = other.get(kind, &name, max)? else {
                     continue;
                 };
                 // Never let a bad copy occupy the true name in our replica.
@@ -176,5 +201,32 @@ impl Store {
             }
         }
         Ok(counts)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_content_is_refused_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = Hash([7; 32]);
+        let store = Store::open(dir.path().to_str().unwrap(), cap).unwrap();
+        let root = dir.path().join(cap.hex());
+
+        let blob = vec![0u8; 4096];
+        let h = store.put_blob(&blob).unwrap();
+        assert!(store.get_blob(h, 4096).is_ok());
+        let err = store.get_blob(h, 4095).unwrap_err().to_string();
+        assert!(err.contains("more than 4095 bytes"), "{err}");
+
+        // A "manifest" bigger than any real one stops the listing.
+        fs::write(
+            root.join(MANIFESTS).join("f".repeat(64)),
+            vec![0u8; MAX_MANIFEST as usize + 1],
+        )
+        .unwrap();
+        assert!(store.list_manifests().is_err());
     }
 }
