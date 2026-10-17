@@ -541,6 +541,15 @@ fn run(cli: Cli) -> Result<()> {
             let cap = zcash::capture(&wallet, tmp.path())?;
             // Never sign state built on a chain that doesn't exist.
             verify_anchor(Some(&cap.anchor), &net)?;
+            // A snapshot continues *this* wallet; never swap in another one.
+            if let Some(w) = head.body.section(zcash::WALLET) {
+                let theirs = zcash::decode_bundle(&ctx.read_section(w)?)?;
+                anyhow::ensure!(
+                    zcash::bundle_accounts(&theirs, tmp.path())? == cap.accounts,
+                    "{} holds a different wallet (its accounts don't match the capsule's); refusing to replace it",
+                    wallet.display()
+                );
+            }
             if let Some(prev) = &head.body.anchor {
                 anyhow::ensure!(
                     cap.anchor.height >= prev.height,

@@ -40,6 +40,8 @@ pub struct Capture {
     pub mnemonic: Option<String>,
     pub anchor: Anchor,
     pub scan: ScanState,
+    /// Which wallet this is: its accounts' viewing keys.
+    pub accounts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -84,6 +86,7 @@ pub fn capture(wallet_dir: &Path, scratch: &Path) -> Result<Capture> {
         )
         .context("wallet has not scanned any block yet; run sync first")?;
     let scan = scan_state(&conn, birthday, height)?;
+    let accounts = accounts(&conn)?;
 
     let snap = scratch.join("snapshot.sqlite");
     let _ = fs::remove_file(&snap);
@@ -107,7 +110,27 @@ pub fn capture(wallet_dir: &Path, scratch: &Path) -> Result<Capture> {
             ),
         },
         scan,
+        accounts,
     })
+}
+
+/// The wallet's identity for continuity purposes: its accounts' UFVKs,
+/// sorted. Two snapshots of the same wallet always agree on this.
+fn accounts(conn: &Connection) -> Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT COALESCE(ufvk, uivk) FROM accounts")?;
+    let mut keys = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    keys.sort();
+    Ok(keys)
+}
+
+/// Accounts of the wallet inside a bundle, e.g. the capsule head's.
+pub fn bundle_accounts(bundle: &WalletBundle, scratch: &Path) -> Result<Vec<String>> {
+    let db = scratch.join("head.sqlite");
+    fs::write(&db, &bundle.db)?;
+    let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    accounts(&conn)
 }
 
 fn scan_state(conn: &Connection, birthday: u32, tip_seen: u32) -> Result<ScanState> {
