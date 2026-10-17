@@ -23,6 +23,8 @@ pub struct Chain {
 
 impl Chain {
     pub fn connect(server: &str) -> Result<Chain> {
+        // Several TLS backends are in the dependency tree; pick one explicitly.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let rt = tokio::runtime::Runtime::new()?;
         let client = rt.block_on(async {
             let mut ch = Channel::from_shared(server.to_string())?;

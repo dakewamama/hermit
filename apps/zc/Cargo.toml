@@ -15,5 +15,6 @@ toml = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 ciborium.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-tonic = { version = "0.14", features = ["tls-webpki-roots"] }
+tonic = { version = "0.14", features = ["tls-webpki-roots", "tls-ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818", default-features = false, features = ["lightwalletd-tonic-tls-webpki-roots"] }
