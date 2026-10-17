@@ -1,0 +1,69 @@
+//! Per-device local state: device keys, the pinned capsule, and the
+//! high-water mark used for rollback detection.
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
+use zc_kernel::assess::HighWater;
+use zc_kernel::{DeviceKeys, Hash};
+
+pub struct Home {
+    dir: PathBuf,
+}
+
+/// What a device knows about the capsule it belongs to. `genesis` and the
+/// initial `hwm` arrive out of band when pairing (think QR code), so a fresh
+/// device cannot be rolled back by the store at join time.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Membership {
+    pub capsule_id: Hash,
+    pub genesis: Hash,
+    pub store: String,
+    pub hwm: Option<HighWater>,
+}
+
+/// The out-of-band pairing payload.
+#[derive(Serialize, Deserialize)]
+pub struct Pairing {
+    pub capsule_id: Hash,
+    pub genesis: Hash,
+    pub head: HighWater,
+}
+
+impl Home {
+    pub fn new(dir: &Path) -> Result<Home> {
+        fs::create_dir_all(dir)?;
+        Ok(Home { dir: dir.to_owned() })
+    }
+
+    pub fn keys(&self) -> Result<DeviceKeys> {
+        let s = fs::read_to_string(self.dir.join("device.json"))
+            .context("no device here; run `zc device init` first")?;
+        Ok(serde_json::from_str(&s)?)
+    }
+
+    pub fn save_keys(&self, k: &DeviceKeys) -> Result<()> {
+        let p = self.dir.join("device.json");
+        anyhow::ensure!(!p.exists(), "device already initialized at {}", p.display());
+        fs::write(p, serde_json::to_string_pretty(k)?)?;
+        Ok(())
+    }
+
+    pub fn membership(&self) -> Result<Membership> {
+        let s = fs::read_to_string(self.dir.join("capsule.json"))
+            .context("device has no capsule; run `zc create` or `zc join`")?;
+        Ok(serde_json::from_str(&s)?)
+    }
+
+    pub fn save_membership(&self, m: &Membership) -> Result<()> {
+        fs::write(self.dir.join("capsule.json"), serde_json::to_string_pretty(m)?)?;
+        Ok(())
+    }
+
+    pub fn set_hwm(&self, hwm: HighWater) -> Result<()> {
+        let mut m = self.membership()?;
+        m.hwm = Some(hwm);
+        self.save_membership(&m)
+    }
+}
