@@ -1379,6 +1379,7 @@ dependencies = [
  "tonic",
  "ureq",
  "zcash_client_backend",
+ "zewif",
 ]
 
 [[package]]
@@ -1934,6 +1935,26 @@ checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "minicbor"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c12b4033ffaa92fbf9df03df38d19324f52bad130dd223f811734a8006dd2d69"
+dependencies = [
+ "minicbor-derive",
+]
+
+[[package]]
+name = "minicbor-derive"
+version = "0.19.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84f5ad8dfe10176465fe33f19ecfcf08783ba66630fdb40b2e4542547c1046f0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -4130,6 +4151,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "zewif"
+version = "1.0.0-rc.3"
+source = "git+https://github.com/zcash/zewif?rev=e669634a816a19871a48af1f54bc31be8dc14fb7#e669634a816a19871a48af1f54bc31be8dc14fb7"
+dependencies = [
+ "hex",
+ "minicbor",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
