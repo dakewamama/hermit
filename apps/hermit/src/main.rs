@@ -665,14 +665,13 @@ fn run(cli: Cli) -> Result<()> {
             if let Some((_, tip)) = chain {
                 let delta = tip.saturating_sub(scan.fully_scanned);
                 let full = tip.saturating_sub(scan.birthday);
+                let vs = match delta {
+                    0 => "already at the tip".to_string(),
+                    d => format!("{}× fewer", full / d),
+                };
                 println!(
-                    "  rescan needed: {delta} blocks (vs {full} from birthday {}) — {:.1}% saved",
-                    scan.birthday,
-                    if full > 0 {
-                        100.0 * (full - delta.min(full)) as f64 / full as f64
-                    } else {
-                        0.0
-                    }
+                    "  rescan needed: {delta} blocks instead of {full} from birthday {} ({vs})",
+                    scan.birthday
                 );
             }
             ctx.home.set_hwm(HighWater {

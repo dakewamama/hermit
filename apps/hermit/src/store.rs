@@ -105,9 +105,12 @@ impl Store {
     }
 
     pub fn get_blob(&self, h: Hash) -> Result<Vec<u8>> {
-        let bytes = self
-            .get(BLOBS, &h.hex())?
-            .with_context(|| format!("store is missing blob {}", h.short()))?;
+        let bytes = self.get(BLOBS, &h.hex())?.with_context(|| {
+            format!(
+                "no verified copy of blob {} (provider lacks it or served corrupted content)",
+                h.short()
+            )
+        })?;
         anyhow::ensure!(
             Hash::of(b"ZcBlob_v1", &bytes) == h,
             "store returned corrupted blob {}",
