@@ -137,10 +137,31 @@ pub fn restore(bundle: &WalletBundle, mnemonic: Option<&str>, into: &Path) -> Re
     let (_, birthday) = network_and_birthday(&config)?;
     fs::write(into.join("keys.toml"), toml::to_string(&config)?)?;
     fs::write(into.join("data.sqlite"), &bundle.db)?;
+    init_block_cache(into)?;
 
     let conn = Connection::open(into.join("data.sqlite"))?;
     let tip: u32 = conn.query_row("SELECT MAX(height) FROM blocks", [], |r| r.get(0))?;
     scan_state(&conn, birthday, tip)
+}
+
+/// The compact-block cache is never carried (it is re-derivable), but the
+/// wallet expects an initialized, empty `FsBlockDb` next to its data DB.
+fn init_block_cache(into: &Path) -> Result<()> {
+    fs::create_dir_all(into.join("blocks"))?;
+    let conn = Connection::open(into.join("blockmeta.sqlite"))?;
+    conn.execute_batch(
+        "CREATE TABLE schemer_migrations (id blob PRIMARY KEY);
+         CREATE TABLE compactblocks_meta (
+             height INTEGER PRIMARY KEY,
+             blockhash BLOB NOT NULL,
+             time INTEGER NOT NULL,
+             sapling_outputs_count INTEGER NOT NULL,
+             orchard_actions_count INTEGER NOT NULL
+         );
+         -- zcash_client_sqlite blockmeta init migration
+         INSERT INTO schemer_migrations VALUES (X'68525B4036E546AAA765720F8389B99D');",
+    )?;
+    Ok(())
 }
 
 mod serde_bytes_vec {
