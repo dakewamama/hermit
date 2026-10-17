@@ -11,6 +11,7 @@
 
 use axum::{
     body::Bytes,
+    extract::DefaultBodyLimit,
     extract::{Path, State},
     http::StatusCode,
     routing::{get, post},
@@ -20,6 +21,8 @@ use clap::Parser;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+const MAX_BLOB: usize = 256 * 1024 * 1024;
 
 #[derive(Parser)]
 struct Args {
@@ -163,6 +166,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/c/{cap}/{kind}", get(list))
         .route("/c/{cap}/{kind}/{name}", get(fetch).put(store))
         .route("/admin/mode", post(set_mode))
+        // A wallet section is a whole data.sqlite: tens of MB is normal.
+        .layer(DefaultBodyLimit::max(MAX_BLOB))
         .with_state(relay);
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     println!("hermit-relay listening on http://{}", args.listen);
