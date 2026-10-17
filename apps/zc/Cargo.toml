@@ -1,0 +1,8 @@
+[package]
+name = "zc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zc-kernel = { path = "../../crates/kernel" }
+anyhow.workspace = true

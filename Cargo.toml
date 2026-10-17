@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/kernel", "apps/zc"]
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+ciborium = "0.2"
+hex = "0.4"
+blake2b_simd = "1"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+age = "0.11"
