@@ -698,7 +698,11 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Sync { other } => {
             let ctx = Ctx::load(home, local)?;
-            ctx.reconcile()?;
+            // Syncing with a third store: bring our provider's state along.
+            // Syncing with our own provider: let the counts below show it.
+            if other != ctx.mem.store {
+                ctx.reconcile()?;
+            }
             let theirs = Store::open(&other, ctx.mem.capsule_id)?;
             let (m_in, b_in) = ctx.store.pull_from(&theirs)?;
             let (m_out, b_out) = theirs.pull_from(&ctx.store)?;
