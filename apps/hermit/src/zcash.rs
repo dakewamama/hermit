@@ -10,12 +10,12 @@
 //! | fsblockdb cache             | dropped: re-derivable from the chain |
 
 use anyhow::{anyhow, Context, Result};
+use hermit_kernel::hash::{cbor, from_cbor};
+use hermit_kernel::{Anchor, Hash};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use hermit_kernel::hash::{cbor, from_cbor};
-use hermit_kernel::{Anchor, Hash};
 
 pub const WALLET: &str = "zcash.wallet";
 pub const SPENDKEY: &str = "zcash.spendkey";
@@ -91,14 +91,20 @@ pub fn capture(wallet_dir: &Path, scratch: &Path) -> Result<Capture> {
     let db = fs::read(&snap)?;
     fs::remove_file(&snap)?;
 
-    let bundle = cbor(&WalletBundle { config: toml::to_string(&config)?, db });
+    let bundle = cbor(&WalletBundle {
+        config: toml::to_string(&config)?,
+        db,
+    });
     Ok(Capture {
         bundle,
         mnemonic,
         anchor: Anchor {
             network,
             height,
-            block_hash: Hash(hash.try_into().map_err(|_| anyhow!("block hash is not 32 bytes"))?),
+            block_hash: Hash(
+                hash.try_into()
+                    .map_err(|_| anyhow!("block hash is not 32 bytes"))?,
+            ),
         },
         scan,
     })
@@ -114,7 +120,11 @@ fn scan_state(conn: &Connection, birthday: u32, tip_seen: u32) -> Result<ScanSta
         Some(h) => h.saturating_sub(1).max(birthday),
         None => tip_seen,
     };
-    Ok(ScanState { birthday, tip_seen, fully_scanned })
+    Ok(ScanState {
+        birthday,
+        tip_seen,
+        fully_scanned,
+    })
 }
 
 pub fn decode_bundle(bytes: &[u8]) -> Result<WalletBundle> {

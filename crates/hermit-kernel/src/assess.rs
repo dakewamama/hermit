@@ -73,10 +73,18 @@ pub fn assess(offered: Vec<Manifest>, genesis: Hash, hwm: Option<HighWater>) -> 
     }
 
     let verdict = decide(&valid, hwm);
-    Assessment { verdict, rejected, valid }
+    Assessment {
+        verdict,
+        rejected,
+        valid,
+    }
 }
 
-fn check_lineage(m: &Manifest, valid: &BTreeMap<Hash, Manifest>, genesis: Hash) -> Result<(), String> {
+fn check_lineage(
+    m: &Manifest,
+    valid: &BTreeMap<Hash, Manifest>,
+    genesis: Hash,
+) -> Result<(), String> {
     let b = &m.body;
     if b.parents.is_empty() {
         if m.id() != genesis {
@@ -141,7 +149,10 @@ fn decide(valid: &BTreeMap<Hash, Manifest>, hwm: Option<HighWater>) -> Verdict {
             .any(|t| ancestors(valid, t.id()).contains(&known.id));
         if !extends {
             let best = tips[0];
-            let served = HighWater { seq: best.body.seq, id: best.id() };
+            let served = HighWater {
+                seq: best.body.seq,
+                id: best.id(),
+            };
             return if served.seq <= known.seq {
                 Verdict::Rollback { served, known }
             } else {
@@ -191,7 +202,11 @@ pub fn changed(base: &Manifest, tip: &Manifest) -> BTreeMap<String, Class> {
 fn classify_fork(valid: &BTreeMap<Hash, Manifest>, a: &Manifest, b: &Manifest) -> Verdict {
     let (ai, bi) = (a.id(), b.id());
     let Some(base_id) = base_of(valid, ai, bi) else {
-        return Verdict::Conflict { a: ai, b: bi, reason: "no common ancestor".into() };
+        return Verdict::Conflict {
+            a: ai,
+            b: bi,
+            reason: "no common ancestor".into(),
+        };
     };
     let base = &valid[&base_id];
 
@@ -216,7 +231,11 @@ fn classify_fork(valid: &BTreeMap<Hash, Manifest>, a: &Manifest, b: &Manifest) -
             };
         }
     }
-    Verdict::ForkMergeable { a: ai, b: bi, base: base_id }
+    Verdict::ForkMergeable {
+        a: ai,
+        b: bi,
+        base: base_id,
+    }
 }
 
 /// How each section of a merge resolves. Metadata sections that changed on
@@ -238,7 +257,11 @@ pub fn plan_merge(valid: &BTreeMap<Hash, Manifest>, a: Hash, b: Hash, base: Hash
     let (ma, mb, mbase) = (&valid[&a], &valid[&b], &valid[&base]);
     let ha = ma.body.anchor.as_ref().map(|x| x.height).unwrap_or(0);
     let hb = mb.body.anchor.as_ref().map(|x| x.height).unwrap_or(0);
-    let (hi, lo) = if (hb, b) > (ha, a) { (mb, ma) } else { (ma, mb) };
+    let (hi, lo) = if (hb, b) > (ha, a) {
+        (mb, ma)
+    } else {
+        (ma, mb)
+    };
 
     let ca = changed(mbase, ma);
     let cb = changed(mbase, mb);
@@ -261,7 +284,12 @@ pub fn plan_merge(valid: &BTreeMap<Hash, Manifest>, a: Hash, b: Hash, base: Hash
                 }
                 // Derived / Progress: the branch with the higher anchor wins;
                 // it is re-verified against the chain on restore.
-                _ => hi.body.section(&n).or(lo.body.section(&n)).cloned().map(Resolution::Take),
+                _ => hi
+                    .body
+                    .section(&n)
+                    .or(lo.body.section(&n))
+                    .cloned()
+                    .map(Resolution::Take),
             },
         };
         if let Some(r) = res {
@@ -269,6 +297,14 @@ pub fn plan_merge(valid: &BTreeMap<Hash, Manifest>, a: Hash, b: Hash, base: Hash
         }
     }
 
-    let devices_from = if mb.body.devices != mbase.body.devices { b } else { a };
-    MergePlan { sections, anchor_from: hi.id(), devices_from }
+    let devices_from = if mb.body.devices != mbase.body.devices {
+        b
+    } else {
+        a
+    };
+    MergePlan {
+        sections,
+        anchor_from: hi.id(),
+        devices_from,
+    }
 }

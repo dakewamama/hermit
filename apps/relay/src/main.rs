@@ -65,7 +65,9 @@ impl Relay {
 
     async fn all_manifests(&self) -> HashSet<String> {
         let mut out = HashSet::new();
-        let Ok(mut caps) = tokio::fs::read_dir(&self.data).await else { return out };
+        let Ok(mut caps) = tokio::fs::read_dir(&self.data).await else {
+            return out;
+        };
         while let Ok(Some(cap)) = caps.next_entry().await {
             if let Ok(mut ms) = tokio::fs::read_dir(cap.path().join("m")).await {
                 while let Ok(Some(m)) = ms.next_entry().await {
@@ -77,7 +79,10 @@ impl Relay {
     }
 }
 
-async fn list(State(r): State<Relay>, Path((cap, kind)): Path<(String, String)>) -> Result<String, StatusCode> {
+async fn list(
+    State(r): State<Relay>,
+    Path((cap, kind)): Path<(String, String)>,
+) -> Result<String, StatusCode> {
     let dir = r.path(&cap, &kind, None)?;
     let mut names = Vec::new();
     if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
@@ -92,7 +97,10 @@ async fn list(State(r): State<Relay>, Path((cap, kind)): Path<(String, String)>)
     Ok(names.join("\n"))
 }
 
-async fn fetch(State(r): State<Relay>, Path((cap, kind, name)): Path<(String, String, String)>) -> Result<Vec<u8>, StatusCode> {
+async fn fetch(
+    State(r): State<Relay>,
+    Path((cap, kind, name)): Path<(String, String, String)>,
+) -> Result<Vec<u8>, StatusCode> {
     if let (Mode::Freeze(visible), "m") = (r.mode(), kind.as_str()) {
         if !visible.contains(&name) {
             return Err(StatusCode::NOT_FOUND);
@@ -147,7 +155,10 @@ async fn set_mode(State(r): State<Relay>, body: String) -> Result<String, Status
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     tokio::fs::create_dir_all(&args.data).await?;
-    let relay = Relay { data: args.data, mode: Arc::new(Mutex::new(Mode::Honest)) };
+    let relay = Relay {
+        data: args.data,
+        mode: Arc::new(Mutex::new(Mode::Honest)),
+    };
     let app = Router::new()
         .route("/c/{cap}/{kind}", get(list))
         .route("/c/{cap}/{kind}/{name}", get(fetch).put(store))

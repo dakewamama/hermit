@@ -179,9 +179,10 @@ impl Manifest {
             return Err("sections not strictly sorted".into());
         }
         let id = self.id();
-        let signed = self.evidence.iter().any(|e| {
-            matches!(e, Evidence::Signature { sig } if verify_sig(&b.author, &id.0, sig))
-        });
+        let signed = self
+            .evidence
+            .iter()
+            .any(|e| matches!(e, Evidence::Signature { sig } if verify_sig(&b.author, &id.0, sig)));
         if !signed {
             return Err("missing or invalid author signature".into());
         }

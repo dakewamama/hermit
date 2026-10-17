@@ -27,9 +27,14 @@ const BLOBS: &str = "b";
 impl Store {
     pub fn open(spec: &str, capsule: Hash) -> Result<Store> {
         let backend = if spec.starts_with("http://") || spec.starts_with("https://") {
-            Backend::Http(format!("{}/c/{}", spec.trim_end_matches('/'), capsule.hex()))
+            Backend::Http(format!(
+                "{}/c/{}",
+                spec.trim_end_matches('/'),
+                capsule.hex()
+            ))
         } else {
-            let root = PathBuf::from(spec.strip_prefix("dir://").unwrap_or(spec)).join(capsule.hex());
+            let root =
+                PathBuf::from(spec.strip_prefix("dir://").unwrap_or(spec)).join(capsule.hex());
             fs::create_dir_all(root.join(MANIFESTS))?;
             fs::create_dir_all(root.join(BLOBS))?;
             Backend::Dir(root)
@@ -47,7 +52,11 @@ impl Store {
                     .call()
                     .with_context(|| format!("listing {base}/{kind}"))?
                     .into_string()?;
-                Ok(body.lines().filter(|l| !l.is_empty()).map(str::to_string).collect())
+                Ok(body
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect())
             }
         }
     }
@@ -140,14 +149,21 @@ impl Store {
                 if have.contains(&name) {
                     continue;
                 }
-                let Some(bytes) = other.get(kind, &name)? else { continue };
+                let Some(bytes) = other.get(kind, &name)? else {
+                    continue;
+                };
                 // Never let a bad copy occupy the true name in our replica.
                 let addressed = match kind {
                     BLOBS => Hash::of(b"ZcBlob_v1", &bytes).hex(),
-                    _ => from_cbor::<Manifest>(&bytes).map(|m| m.id().hex()).unwrap_or_default(),
+                    _ => from_cbor::<Manifest>(&bytes)
+                        .map(|m| m.id().hex())
+                        .unwrap_or_default(),
                 };
                 if addressed != name {
-                    eprintln!("  ✗ skipped {kind}/{}: content does not match its address", &name[..8.min(name.len())]);
+                    eprintln!(
+                        "  ✗ skipped {kind}/{}: content does not match its address",
+                        &name[..8.min(name.len())]
+                    );
                     continue;
                 }
                 self.put(kind, &name, &bytes)?;

@@ -54,7 +54,9 @@ pub(crate) mod hex_bytes {
         s.serialize_bytes(v)
     }
 
-    pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(d: D) -> Result<[u8; N], D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(
+        d: D,
+    ) -> Result<[u8; N], D::Error> {
         let v: serde_bytes_compat::Bytes = Deserialize::deserialize(d)?;
         v.0.try_into().map_err(|_| D::Error::custom("wrong length"))
     }

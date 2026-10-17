@@ -7,11 +7,21 @@ use hermit_kernel::{seal, DeviceKeys};
 
 fn sec(name: &str, class: Class, content: &str) -> SectionRef {
     let plain = Hash::of(b"test", content.as_bytes());
-    SectionRef { name: name.into(), class, plain, blob: plain, len: content.len() as u64 }
+    SectionRef {
+        name: name.into(),
+        class,
+        plain,
+        blob: plain,
+        len: content.len() as u64,
+    }
 }
 
 fn anchor(h: u32) -> Option<Anchor> {
-    Some(Anchor { network: "test".into(), height: h, block_hash: Hash::of(b"blk", &h.to_le_bytes()) })
+    Some(Anchor {
+        network: "test".into(),
+        height: h,
+        block_hash: Hash::of(b"blk", &h.to_le_bytes()),
+    })
 }
 
 struct World {
@@ -28,7 +38,10 @@ fn world() -> World {
         "zcash/v1",
         &a,
         devices,
-        vec![sec("wallet", Class::Progress, "db@100"), sec("labels", Class::Metadata, "{}")],
+        vec![
+            sec("wallet", Class::Progress, "db@100"),
+            sec("labels", Class::Metadata, "{}"),
+        ],
         anchor(100),
     )
     .sign(&a);
@@ -40,7 +53,10 @@ fn step(parent: &Manifest, who: &DeviceKeys, wallet: &str, labels: &str, h: u32)
         &[parent],
         who,
         parent.body.devices.clone(),
-        vec![sec("wallet", Class::Progress, wallet), sec("labels", Class::Metadata, labels)],
+        vec![
+            sec("wallet", Class::Progress, wallet),
+            sec("labels", Class::Metadata, labels),
+        ],
         anchor(h),
         "step",
     )
@@ -48,7 +64,10 @@ fn step(parent: &Manifest, who: &DeviceKeys, wallet: &str, labels: &str, h: u32)
 }
 
 fn hw(m: &Manifest) -> HighWater {
-    HighWater { seq: m.body.seq, id: m.id() }
+    HighWater {
+        seq: m.body.seq,
+        id: m.id(),
+    }
 }
 
 #[test]
@@ -68,7 +87,13 @@ fn stale_store_is_rollback() {
     let s2 = step(&s1, &w.a, "db@120", "{}", 120);
     // Device has accepted s2; store hides it and serves only up to s1.
     let r = assess(vec![w.g.clone(), s1.clone()], w.g.id(), Some(hw(&s2)));
-    assert_eq!(r.verdict, Verdict::Rollback { served: hw(&s1), known: hw(&s2) });
+    assert_eq!(
+        r.verdict,
+        Verdict::Rollback {
+            served: hw(&s1),
+            known: hw(&s2)
+        }
+    );
     assert_eq!(r.verdict.code(), 20);
 }
 
@@ -78,8 +103,14 @@ fn metadata_and_progress_fork_is_mergeable() {
     let s1 = step(&w.g, &w.a, "db@110", "{}", 110);
     let xa = step(&s1, &w.a, "db@130", "{rent}", 130);
     let xb = step(&s1, &w.b, "db@125", "{bob}", 125);
-    let r = assess(vec![w.g.clone(), s1.clone(), xa.clone(), xb.clone()], w.g.id(), Some(hw(&s1)));
-    let Verdict::ForkMergeable { a, b, base } = r.verdict else { panic!("{:?}", r.verdict) };
+    let r = assess(
+        vec![w.g.clone(), s1.clone(), xa.clone(), xb.clone()],
+        w.g.id(),
+        Some(hw(&s1)),
+    );
+    let Verdict::ForkMergeable { a, b, base } = r.verdict else {
+        panic!("{:?}", r.verdict)
+    };
     assert_eq!(base, s1.id());
     let plan = plan_merge(&r.valid, a, b, base);
     assert_eq!(plan.anchor_from, xa.id(), "higher anchor wins");
@@ -96,8 +127,16 @@ fn own_branch_accepted_does_not_hide_the_other_branch() {
     let xa = step(&s1, &w.a, "db@130", "{rent}", 130);
     let xb = step(&s1, &w.b, "db@125", "{bob}", 125);
     // Device A already accepted its own xa, then syncs and sees xb.
-    let r = assess(vec![w.g.clone(), s1, xa.clone(), xb], w.g.id(), Some(hw(&xa)));
-    assert!(matches!(r.verdict, Verdict::ForkMergeable { .. }), "{:?}", r.verdict);
+    let r = assess(
+        vec![w.g.clone(), s1, xa.clone(), xb],
+        w.g.id(),
+        Some(hw(&xa)),
+    );
+    assert!(
+        matches!(r.verdict, Verdict::ForkMergeable { .. }),
+        "{:?}",
+        r.verdict
+    );
 }
 
 #[test]
@@ -108,10 +147,30 @@ fn concurrent_authority_change_is_conflict() {
     // A adds a tablet; B concurrently removes A.
     let mut add = s1.body.devices.clone();
     add.push(c.public());
-    let xa = Body::child(&[&s1], &w.a, add, s1.body.sections.clone(), s1.body.anchor.clone(), "add tablet").sign(&w.a);
-    let xb = Body::child(&[&s1], &w.b, vec![w.b.public()], s1.body.sections.clone(), s1.body.anchor.clone(), "revoke laptop").sign(&w.b);
+    let xa = Body::child(
+        &[&s1],
+        &w.a,
+        add,
+        s1.body.sections.clone(),
+        s1.body.anchor.clone(),
+        "add tablet",
+    )
+    .sign(&w.a);
+    let xb = Body::child(
+        &[&s1],
+        &w.b,
+        vec![w.b.public()],
+        s1.body.sections.clone(),
+        s1.body.anchor.clone(),
+        "revoke laptop",
+    )
+    .sign(&w.b);
     let r = assess(vec![w.g.clone(), s1, xa, xb], w.g.id(), None);
-    assert!(matches!(r.verdict, Verdict::Conflict { ref reason, .. } if reason.starts_with("AUTHORITY")), "{:?}", r.verdict);
+    assert!(
+        matches!(r.verdict, Verdict::Conflict { ref reason, .. } if reason.starts_with("AUTHORITY")),
+        "{:?}",
+        r.verdict
+    );
     assert_eq!(r.verdict.code(), 22);
 }
 
@@ -124,10 +183,17 @@ fn unknown_device_and_tampering_are_rejected() {
     tampered.body.note = "edited after signing".into();
     let mut forged_root = step(&w.g, &w.a, "db@111", "{}", 111);
     forged_root.body.sections[0].plain = Hash::of(b"x", b"y");
-    let r = assess(vec![w.g.clone(), evil, tampered, forged_root], w.g.id(), None);
+    let r = assess(
+        vec![w.g.clone(), evil, tampered, forged_root],
+        w.g.id(),
+        None,
+    );
     assert_eq!(r.verdict, Verdict::Ok { head: w.g.id() });
     assert_eq!(r.rejected.len(), 3);
-    assert!(r.rejected.iter().any(|(_, e)| e.starts_with("UNKNOWN_DEVICE")));
+    assert!(r
+        .rejected
+        .iter()
+        .any(|(_, e)| e.starts_with("UNKNOWN_DEVICE")));
 }
 
 #[test]
@@ -141,7 +207,15 @@ fn foreign_genesis_is_rejected() {
 #[test]
 fn revoked_device_cannot_author() {
     let w = world();
-    let s1 = Body::child(&[&w.g], &w.a, vec![w.a.public()], w.g.body.sections.clone(), w.g.body.anchor.clone(), "revoke phone").sign(&w.a);
+    let s1 = Body::child(
+        &[&w.g],
+        &w.a,
+        vec![w.a.public()],
+        w.g.body.sections.clone(),
+        w.g.body.anchor.clone(),
+        "revoke phone",
+    )
+    .sign(&w.a);
     let s2 = step(&s1, &w.b, "db@200", "{}", 200);
     let r = assess(vec![w.g.clone(), s1.clone(), s2], w.g.id(), None);
     assert_eq!(r.verdict, Verdict::Ok { head: s1.id() });
@@ -153,7 +227,10 @@ fn seal_roundtrip_and_non_recipient() {
     let w = world();
     let outsider = DeviceKeys::generate("outsider");
     let ct = seal::seal(b"secret wallet bytes", &w.g.body.devices).unwrap();
-    assert_eq!(seal::open(&ct, &w.b.identity()).unwrap(), b"secret wallet bytes");
+    assert_eq!(
+        seal::open(&ct, &w.b.identity()).unwrap(),
+        b"secret wallet bytes"
+    );
     assert!(seal::open(&ct, &outsider.identity()).is_err());
     assert!(!ct.windows(6).any(|x| x == b"secret"));
 }

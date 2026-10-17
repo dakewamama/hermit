@@ -14,9 +14,8 @@ pub fn seal(plaintext: &[u8], devices: &[Device]) -> Result<Vec<u8>> {
                 .map_err(|e| anyhow!("bad recipient for {}: {e}", d.name))
         })
         .collect::<Result<Vec<_>>>()?;
-    let encryptor = age::Encryptor::with_recipients(
-        recipients.iter().map(|r| r as &dyn age::Recipient),
-    )?;
+    let encryptor =
+        age::Encryptor::with_recipients(recipients.iter().map(|r| r as &dyn age::Recipient))?;
     let mut out = Vec::new();
     let mut w = encryptor.wrap_output(&mut out)?;
     w.write_all(plaintext)?;

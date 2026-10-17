@@ -2,11 +2,11 @@
 //! high-water mark used for rollback detection.
 
 use anyhow::{Context, Result};
+use hermit_kernel::assess::HighWater;
+use hermit_kernel::{DeviceKeys, Hash};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use hermit_kernel::assess::HighWater;
-use hermit_kernel::{DeviceKeys, Hash};
 
 pub struct Home {
     dir: PathBuf,
@@ -34,7 +34,9 @@ pub struct Pairing {
 impl Home {
     pub fn new(dir: &Path) -> Result<Home> {
         fs::create_dir_all(dir)?;
-        Ok(Home { dir: dir.to_owned() })
+        Ok(Home {
+            dir: dir.to_owned(),
+        })
     }
 
     /// This device's own copy of every manifest and blob it has seen or
@@ -63,7 +65,10 @@ impl Home {
     }
 
     pub fn save_membership(&self, m: &Membership) -> Result<()> {
-        fs::write(self.dir.join("capsule.json"), serde_json::to_string_pretty(m)?)?;
+        fs::write(
+            self.dir.join("capsule.json"),
+            serde_json::to_string_pretty(m)?,
+        )?;
         Ok(())
     }
 

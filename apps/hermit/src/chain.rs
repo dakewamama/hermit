@@ -3,11 +3,11 @@
 //! real block, and the rescan delta is measured against the live tip.
 
 use anyhow::{anyhow, Result};
+use hermit_kernel::{Anchor, Hash};
 use tonic::transport::{Channel, ClientTlsConfig};
 use zcash_client_backend::proto::service::{
     compact_tx_streamer_client::CompactTxStreamerClient, BlockId, ChainSpec,
 };
-use hermit_kernel::{Anchor, Hash};
 
 pub fn default_server(network: &str) -> &'static str {
     match network {
@@ -58,9 +58,14 @@ impl Chain {
     pub fn block_hash(&mut self, height: u32) -> Result<Hash> {
         let r = self
             .rt
-            .block_on(self.client.get_block(BlockId { height: height as u64, hash: vec![] }))?
+            .block_on(self.client.get_block(BlockId {
+                height: height as u64,
+                hash: vec![],
+            }))?
             .into_inner();
-        Ok(Hash(r.hash.try_into().map_err(|_| anyhow!("server returned a malformed block hash"))?))
+        Ok(Hash(r.hash.try_into().map_err(|_| {
+            anyhow!("server returned a malformed block hash")
+        })?))
     }
 
     /// `Ok(None)` if the anchor is on the chain, `Ok(Some(actual))` if not.

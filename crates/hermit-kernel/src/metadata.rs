@@ -32,7 +32,14 @@ impl Labels {
 
     pub fn set(&mut self, key: &str, value: Option<String>, device: [u8; 32]) {
         let lamport = self.clock() + 1;
-        self.0.insert(key.to_string(), Entry { value, lamport, device });
+        self.0.insert(
+            key.to_string(),
+            Entry {
+                value,
+                lamport,
+                device,
+            },
+        );
     }
 
     pub fn merge(&self, other: &Labels) -> Labels {
