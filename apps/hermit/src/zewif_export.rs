@@ -83,7 +83,7 @@ pub fn export(db: &Path, anchor: &Anchor, labels: &Labels, lineage: &Lineage) ->
             account.set_recover_until_height(BlockHeight::from(h));
         }
         for r in &scanned {
-            account.add_scanned_range(r.clone());
+            account.add_scanned_range(*r);
         }
         wallet.add_account(account);
     }
