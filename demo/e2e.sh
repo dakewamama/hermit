@@ -11,10 +11,17 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 HERMIT=${HERMIT:-$ROOT/target/debug/hermit}
 DEVTOOL=${DEVTOOL:?set DEVTOOL to a zcash-devtool binary}
+RELAY_BIN=${RELAY_BIN:-$ROOT/target/debug/hermit-relay}
 SERVER=${SERVER:-https://testnet.zec.rocks:443}
+PORT=${PORT:-8787}
+RELAY=http://127.0.0.1:$PORT
 WORK=$(mktemp -d)
-trap 'echo "workdir: $WORK"' EXIT
 cd "$WORK"
+"$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data >relay.log 2>&1 &
+RELAY_PID=$!
+trap 'kill $RELAY_PID 2>/dev/null; echo "workdir: $WORK"' EXIT
+relay_mode() { curl -sf -X POST "$RELAY/admin/mode" -d "$1" >/dev/null && echo "(relay is now: $1)"; }
+sleep 1
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 expect() { # expect <code> <cmd...>
@@ -22,7 +29,12 @@ expect() { # expect <code> <cmd...>
   set +e; "$@"; local got=$?; set -e
   if [[ $got -ne $want ]]; then echo "FAIL: expected exit $want, got $got: $*"; exit 1; fi
 }
-wallet() { "$DEVTOOL" wallet "$@" 2>&1 | grep -v ' INFO ' || true; }
+wallet() { # a stalled lightwalletd connection must fail, not hang
+  local out rc=0
+  out=$(timeout 120 "$DEVTOOL" wallet "$@" 2>&1) || rc=$?
+  [[ $rc -ne 124 ]] || { echo "FAIL: devtool timed out: wallet $*"; exit 1; }
+  grep -v ' INFO ' <<<"$out" || true
+}
 
 step "real testnet wallet on device A"
 wallet -w walletA init --name e2e -i walletA.age -n test >/dev/null
@@ -35,11 +47,11 @@ echo "address: $addr_a"
 "$HERMIT" --home C device init --name tablet >tablet.json
 
 step "capsule + pairing"
-"$HERMIT" --home A create --wallet walletA --store dir://storeA --include-secret
+"$HERMIT" --home A create --wallet walletA --store "$RELAY" --include-secret
 "$HERMIT" --home A device add phone.json
 "$HERMIT" --home A pair >pair.json
 "$HERMIT" --home B join --store dir://storeB pair.json
-"$HERMIT" --home B sync dir://storeA
+"$HERMIT" --home B sync "$RELAY"
 
 step "restore on device B (view-only) and resume scanning"
 "$HERMIT" --home B restore --into walletB --server "$SERVER"
@@ -54,22 +66,31 @@ step "restore with spend authority (still locked to the wallet identity)"
 [[ $(wallet -w walletB2 display-mnemonic --enable -i walletA.age | wc -w) -eq 24 ]] \
   && echo "✓ spend key unlocks only with the wallet's age identity"
 
-step "rollback: store hides the newest state"
+step "rollback: the relay freezes and silently drops writes"
+relay_mode freeze
 "$HERMIT" --home A label contact:bob u1bob
-cap=$(ls storeA)
-newest=$(ls -t "storeA/$cap/m" | head -1)
-mv "storeA/$cap/m/$newest" hidden
 expect 20 "$HERMIT" --home A status --offline
-mv hidden "storeA/$cap/m/$newest"
+relay_mode honest
+"$HERMIT" --home A status --offline
+echo "✓ withheld state republished from A's replica"
+
+step "corrupting relay cannot poison a fresh device"
+"$HERMIT" --home D device init --name kiosk >kiosk.json
+"$HERMIT" --home A device add kiosk.json
+"$HERMIT" --home A pair >pair-d.json
+"$HERMIT" --home D join --store "$RELAY" pair-d.json
+relay_mode corrupt
+expect 1 "$HERMIT" --home D restore --into walletD --offline
+relay_mode honest
 
 step "partitioned label edits merge"
-"$HERMIT" --home B sync dir://storeA
+"$HERMIT" --home B sync "$RELAY"
 "$HERMIT" --home A label "tx:first" "rent October"
 "$HERMIT" --home B label contact:alice u1alice
-"$HERMIT" --home B sync dir://storeA
+"$HERMIT" --home B sync "$RELAY"
 expect 21 "$HERMIT" --home B status --offline
 "$HERMIT" --home B merge
-"$HERMIT" --home A sync dir://storeB
+"$HERMIT" --home B sync "$RELAY"
 [[ $("$HERMIT" --home A labels | wc -l) -eq 3 ]] && echo "✓ both devices' labels kept"
 
 step "wallet synced from a lying server: refused at signing"
@@ -81,7 +102,7 @@ expect 23 "$HERMIT" --home A snapshot --wallet evil --server "$SERVER"
 step "partitioned authority edits conflict"
 "$HERMIT" --home A device add tablet.json
 "$HERMIT" --home B device revoke laptop
-"$HERMIT" --home B sync dir://storeA
+"$HERMIT" --home B sync "$RELAY"
 expect 22 "$HERMIT" --home B merge
 
 printf '\n\033[1mALL OK\033[0m\n'
