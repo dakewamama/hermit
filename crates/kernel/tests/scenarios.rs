@@ -90,6 +90,17 @@ fn metadata_and_progress_fork_is_mergeable() {
 }
 
 #[test]
+fn own_branch_accepted_does_not_hide_the_other_branch() {
+    let w = world();
+    let s1 = step(&w.g, &w.a, "db@110", "{}", 110);
+    let xa = step(&s1, &w.a, "db@130", "{rent}", 130);
+    let xb = step(&s1, &w.b, "db@125", "{bob}", 125);
+    // Device A already accepted its own xa, then syncs and sees xb.
+    let r = assess(vec![w.g.clone(), s1, xa.clone(), xb], w.g.id(), Some(hw(&xa)));
+    assert!(matches!(r.verdict, Verdict::ForkMergeable { .. }), "{:?}", r.verdict);
+}
+
+#[test]
 fn concurrent_authority_change_is_conflict() {
     let w = world();
     let c = DeviceKeys::generate("tablet");

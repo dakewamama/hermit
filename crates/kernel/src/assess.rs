@@ -133,13 +133,13 @@ fn decide(valid: &BTreeMap<Hash, Manifest>, hwm: Option<HighWater>) -> Verdict {
     }
     tips.sort_by_key(|m| (std::cmp::Reverse(m.body.seq), m.id()));
 
+    // The high-water mark only decides rollback. Valid tips that don't extend
+    // it are concurrent branches and must surface as a fork, never be hidden.
     if let Some(known) = hwm {
-        let extends: Vec<&Manifest> = tips
+        let extends = tips
             .iter()
-            .copied()
-            .filter(|t| ancestors(valid, t.id()).contains(&known.id))
-            .collect();
-        if extends.is_empty() {
+            .any(|t| ancestors(valid, t.id()).contains(&known.id));
+        if !extends {
             let best = tips[0];
             let served = HighWater { seq: best.body.seq, id: best.id() };
             return if served.seq <= known.seq {
@@ -148,7 +148,6 @@ fn decide(valid: &BTreeMap<Hash, Manifest>, hwm: Option<HighWater>) -> Verdict {
                 Verdict::Diverged { known }
             };
         }
-        tips = extends;
     }
 
     match tips.as_slice() {
