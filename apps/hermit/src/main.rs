@@ -287,13 +287,6 @@ fn describe(v: &Verdict) -> String {
     }
 }
 
-fn scratch(home: &Home) -> Result<PathBuf> {
-    let _ = home;
-    let p = std::env::temp_dir().join(format!("hermit-{}", std::process::id()));
-    fs::create_dir_all(&p)?;
-    Ok(p)
-}
-
 /// Seals a plaintext section somewhere and returns its reference.
 type PutSection<'a> = dyn Fn(&str, Class, &[u8]) -> Result<SectionRef> + 'a;
 
@@ -378,7 +371,8 @@ fn run(cli: Cli) -> Result<()> {
             include_secret,
         } => {
             let keys = home.keys()?;
-            let cap = zcash::capture(&wallet, &scratch(&home)?)?;
+            let tmp = tempfile::tempdir()?;
+            let cap = zcash::capture(&wallet, tmp.path())?;
             let devices = vec![keys.public()];
             // The capsule id is only known after genesis is built, so seal in
             // memory and upload once there is somewhere to put the blobs.
@@ -473,7 +467,8 @@ fn run(cli: Cli) -> Result<()> {
         } => {
             let ctx = Ctx::load(home)?;
             let (_, head) = ctx.head()?;
-            let cap = zcash::capture(&wallet, &scratch(&ctx.home)?)?;
+            let tmp = tempfile::tempdir()?;
+            let cap = zcash::capture(&wallet, tmp.path())?;
             // Never sign state built on a chain that doesn't exist.
             verify_anchor(Some(&cap.anchor), &net)?;
             if let Some(prev) = &head.body.anchor {
