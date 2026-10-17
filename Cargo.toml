@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/kernel", "apps/zc"]
+members = ["crates/hermit-kernel", "apps/hermit"]
 
 [workspace.dependencies]
 anyhow = "1"

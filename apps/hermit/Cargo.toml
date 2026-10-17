@@ -1,11 +1,11 @@
 [package]
-name = "zc"
+name = "hermit"
 version = "0.1.0"
 edition = "2021"
-description = "Zcash Continuity CLI"
+description = "Hermit: portable, lineage-verified Zcash wallet state"
 
 [dependencies]
-zc-kernel = { path = "../../crates/kernel" }
+hermit-kernel = { path = "../../crates/hermit-kernel" }
 anyhow.workspace = true
 serde.workspace = true
 hex.workspace = true

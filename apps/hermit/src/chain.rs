@@ -7,7 +7,7 @@ use tonic::transport::{Channel, ClientTlsConfig};
 use zcash_client_backend::proto::service::{
     compact_tx_streamer_client::CompactTxStreamerClient, BlockId, ChainSpec,
 };
-use zc_kernel::{Anchor, Hash};
+use hermit_kernel::{Anchor, Hash};
 
 pub fn default_server(network: &str) -> &'static str {
     match network {

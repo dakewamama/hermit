@@ -5,8 +5,8 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::PathBuf;
-use zc_kernel::hash::{cbor, from_cbor, Hash};
-use zc_kernel::Manifest;
+use hermit_kernel::hash::{cbor, from_cbor, Hash};
+use hermit_kernel::Manifest;
 
 pub struct Store {
     root: PathBuf,

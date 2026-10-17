@@ -14,8 +14,8 @@ use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
-use zc_kernel::hash::{cbor, from_cbor};
-use zc_kernel::{Anchor, Hash};
+use hermit_kernel::hash::{cbor, from_cbor};
+use hermit_kernel::{Anchor, Hash};
 
 pub const WALLET: &str = "zcash.wallet";
 pub const SPENDKEY: &str = "zcash.spendkey";

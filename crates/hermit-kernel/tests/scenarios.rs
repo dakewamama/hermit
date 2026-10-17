@@ -1,9 +1,9 @@
 //! The attack matrix from the demo, at kernel level (no Zcash, no I/O).
 
-use zc_kernel::assess::{assess, plan_merge, HighWater, Resolution, Verdict};
-use zc_kernel::hash::Hash;
-use zc_kernel::manifest::{Anchor, Body, Class, Evidence, Manifest, SectionRef};
-use zc_kernel::{seal, DeviceKeys};
+use hermit_kernel::assess::{assess, plan_merge, HighWater, Resolution, Verdict};
+use hermit_kernel::hash::Hash;
+use hermit_kernel::manifest::{Anchor, Body, Class, Evidence, Manifest, SectionRef};
+use hermit_kernel::{seal, DeviceKeys};
 
 fn sec(name: &str, class: Class, content: &str) -> SectionRef {
     let plain = Hash::of(b"test", content.as_bytes());

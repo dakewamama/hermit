@@ -5,8 +5,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use zc_kernel::assess::HighWater;
-use zc_kernel::{DeviceKeys, Hash};
+use hermit_kernel::assess::HighWater;
+use hermit_kernel::{DeviceKeys, Hash};
 
 pub struct Home {
     dir: PathBuf,
@@ -39,7 +39,7 @@ impl Home {
 
     pub fn keys(&self) -> Result<DeviceKeys> {
         let s = fs::read_to_string(self.dir.join("device.json"))
-            .context("no device here; run `zc device init` first")?;
+            .context("no device here; run `hermit device init` first")?;
         Ok(serde_json::from_str(&s)?)
     }
 
@@ -52,7 +52,7 @@ impl Home {
 
     pub fn membership(&self) -> Result<Membership> {
         let s = fs::read_to_string(self.dir.join("capsule.json"))
-            .context("device has no capsule; run `zc create` or `zc join`")?;
+            .context("device has no capsule; run `hermit create` or `hermit join`")?;
         Ok(serde_json::from_str(&s)?)
     }
 

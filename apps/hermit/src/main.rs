@@ -9,17 +9,17 @@ use home::{Home, Membership, Pairing};
 use std::fs;
 use std::path::PathBuf;
 use store::Store;
-use zc_kernel::assess::{assess, plan_merge, Assessment, HighWater, Resolution, Verdict};
-use zc_kernel::metadata::Labels;
-use zc_kernel::{seal, Body, Class, Device, DeviceKeys, Hash, Manifest, SectionRef};
+use hermit_kernel::assess::{assess, plan_merge, Assessment, HighWater, Resolution, Verdict};
+use hermit_kernel::metadata::Labels;
+use hermit_kernel::{seal, Body, Class, Device, DeviceKeys, Hash, Manifest, SectionRef};
 
 const EXIT_ANCHOR_MISMATCH: i32 = 23;
 
 #[derive(Parser)]
-#[command(name = "zc", about = "Zcash Continuity: portable, lineage-verified shielded wallet state")]
+#[command(name = "hermit", about = "Hermit: wallets are shells, your state moves on")]
 struct Cli {
     /// This device's local state directory.
-    #[arg(long, env = "ZC_HOME")]
+    #[arg(long, env = "HERMIT_HOME")]
     home: PathBuf,
     #[command(subcommand)]
     cmd: Cmd,
@@ -208,7 +208,7 @@ fn describe(v: &Verdict) -> String {
             known.id.short()
         ),
         Verdict::ForkMergeable { a, b, base } => format!(
-            "FORK: heads {} and {} diverged from {} — mergeable, run `zc merge`",
+            "FORK: heads {} and {} diverged from {} — mergeable, run `hermit merge`",
             a.short(),
             b.short(),
             base.short()
@@ -229,7 +229,7 @@ fn describe(v: &Verdict) -> String {
 
 fn scratch(home: &Home) -> Result<PathBuf> {
     let _ = home;
-    let p = std::env::temp_dir().join(format!("zc-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("hermit-{}", std::process::id()));
     fs::create_dir_all(&p)?;
     Ok(p)
 }

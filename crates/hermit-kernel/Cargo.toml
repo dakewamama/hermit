@@ -1,5 +1,5 @@
 [package]
-name = "zc-kernel"
+name = "hermit-kernel"
 version = "0.1.0"
 edition = "2021"
 description = "Continuity kernel: signed, lineage-checked, class-aware state transitions"

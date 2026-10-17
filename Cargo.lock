@@ -1317,6 +1317,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "hermit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ciborium",
+ "clap",
+ "hermit-kernel",
+ "hex",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml 0.8.23",
+ "tonic",
+ "zcash_client_backend",
+]
+
+[[package]]
+name = "hermit-kernel"
+version = "0.1.0"
+dependencies = [
+ "age",
+ "anyhow",
+ "blake2b_simd",
+ "ciborium",
+ "ed25519-dalek",
+ "hex",
+ "rand 0.8.8",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3495,40 +3529,6 @@ dependencies = [
  "rand_core 0.6.4",
  "serde",
  "zeroize",
-]
-
-[[package]]
-name = "zc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ciborium",
- "clap",
- "hex",
- "rusqlite",
- "rustls",
- "serde",
- "serde_json",
- "tokio",
- "toml 0.8.23",
- "tonic",
- "zc-kernel",
- "zcash_client_backend",
-]
-
-[[package]]
-name = "zc-kernel"
-version = "0.1.0"
-dependencies = [
- "age",
- "anyhow",
- "blake2b_simd",
- "ciborium",
- "ed25519-dalek",
- "hex",
- "rand 0.8.8",
- "serde",
- "thiserror 2.0.21",
 ]
 
 [[package]]
