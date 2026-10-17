@@ -157,16 +157,18 @@ impl Store {
                 };
                 // Never let a bad copy occupy the true name in our replica.
                 let addressed = match kind {
-                    BLOBS => Hash::of(b"ZcBlob_v1", &bytes).hex(),
+                    BLOBS => Ok(Hash::of(b"ZcBlob_v1", &bytes).hex()),
                     _ => from_cbor::<Manifest>(&bytes)
                         .map(|m| m.id().hex())
-                        .unwrap_or_default(),
+                        .map_err(|_| "not a manifest this version can read"),
                 };
-                if addressed != name {
-                    eprintln!(
-                        "  ✗ skipped {kind}/{}: content does not match its address",
-                        &name[..8.min(name.len())]
-                    );
+                let problem = match addressed {
+                    Ok(a) if a == name => None,
+                    Ok(_) => Some("content does not match its address"),
+                    Err(e) => Some(e),
+                };
+                if let Some(why) = problem {
+                    eprintln!("  ✗ skipped {kind}/{}: {why}", &name[..8.min(name.len())]);
                     continue;
                 }
                 self.put(kind, &name, &bytes)?;

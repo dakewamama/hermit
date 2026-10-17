@@ -82,7 +82,8 @@ pub struct Manifest {
     pub evidence: Vec<Evidence>,
 }
 
-pub const VERSION: u16 = 1;
+/// 2: notes are sealed bytes (v1 stored them as plaintext strings).
+pub const VERSION: u16 = 2;
 
 pub fn state_root(sections: &[SectionRef]) -> Hash {
     let leaves: Vec<(&str, Class, Hash)> = sections
