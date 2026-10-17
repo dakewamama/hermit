@@ -27,6 +27,10 @@ struct Cli {
     /// This device's local state directory.
     #[arg(long, env = "HERMIT_HOME")]
     home: PathBuf,
+    /// Work from this device's replica only and leave the provider alone;
+    /// new transitions are published on the next sync.
+    #[arg(long, global = true)]
+    local: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -138,17 +142,23 @@ struct Ctx {
     home: Home,
     keys: DeviceKeys,
     mem: Membership,
-    /// The provider. Untrusted, possibly stale or censoring.
-    remote: Store,
+    /// The provider. Untrusted, possibly stale or censoring. `None` when
+    /// working locally.
+    remote: Option<Store>,
     /// This device's replica. Everything is read from here after reconciling.
     store: Store,
 }
 
 impl Ctx {
-    fn load(home: Home) -> Result<Ctx> {
+    fn load(home: Home, local: bool) -> Result<Ctx> {
         let keys = home.keys()?;
         let mem = home.membership()?;
-        let remote = Store::open(&mem.store, mem.capsule_id)?;
+        let remote = if local {
+            println!("  (local: working from this device's replica)");
+            None
+        } else {
+            Some(Store::open(&mem.store, mem.capsule_id)?)
+        };
         let store = Store::open(&home.replica(), mem.capsule_id)?;
         Ok(Ctx {
             home,
@@ -162,9 +172,12 @@ impl Ctx {
     /// Pull what the provider has, republish what it lacks, and report
     /// anything it still withholds afterwards.
     fn reconcile(&self) -> Result<Vec<String>> {
-        self.store.pull_from(&self.remote)?;
-        self.remote.pull_from(&self.store)?;
-        let theirs = self.remote.manifest_ids()?;
+        let Some(remote) = &self.remote else {
+            return Ok(vec![]);
+        };
+        self.store.pull_from(remote)?;
+        remote.pull_from(&self.store)?;
+        let theirs = remote.manifest_ids()?;
         let mut missing: Vec<String> = self
             .store
             .manifest_ids()?
@@ -247,7 +260,9 @@ impl Ctx {
     fn commit(&self, body: Body) -> Result<Manifest> {
         let m = body.sign(&self.keys);
         self.store.put_manifest(&m)?;
-        self.remote.pull_from(&self.store)?;
+        if let Some(remote) = &self.remote {
+            remote.pull_from(&self.store)?;
+        }
         self.home.set_hwm(HighWater {
             seq: m.body.seq,
             id: m.id(),
@@ -362,6 +377,7 @@ fn verify_anchor(anchor: Option<&Anchor>, net: &Net) -> Result<Option<(chain::Ch
 
 fn run(cli: Cli) -> Result<()> {
     let home = Home::new(&cli.home)?;
+    let local = cli.local;
     match cli.cmd {
         Cmd::Device(DeviceCmd::Init { name }) => {
             let k = DeviceKeys::generate(&name);
@@ -436,7 +452,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Cmd::Pair => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             let p = Pairing {
                 capsule_id: ctx.mem.capsule_id,
@@ -471,7 +487,7 @@ fn run(cli: Cli) -> Result<()> {
             note,
             net,
         } => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             let tmp = tempfile::tempdir()?;
             let cap = zcash::capture(&wallet, tmp.path())?;
@@ -505,7 +521,7 @@ fn run(cli: Cli) -> Result<()> {
             print_scan(&cap);
         }
         Cmd::Label { key, value } => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             let sref = head
                 .body
@@ -542,7 +558,7 @@ fn run(cli: Cli) -> Result<()> {
             ctx.commit(body)?;
         }
         Cmd::Labels => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             let sref = head
                 .body
@@ -553,7 +569,7 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Cmd::Device(DeviceCmd::Add { device }) => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             let d: Device = serde_json::from_str(&fs::read_to_string(device)?)?;
             anyhow::ensure!(
@@ -574,7 +590,7 @@ fn run(cli: Cli) -> Result<()> {
             ctx.commit(body)?;
         }
         Cmd::Device(DeviceCmd::Revoke { name }) => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             let devices: Vec<Device> = head
                 .body
@@ -600,7 +616,7 @@ fn run(cli: Cli) -> Result<()> {
             ctx.commit(body)?;
         }
         Cmd::Status { net } => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let a = ctx.assess()?;
             let Verdict::Ok { head } = a.verdict else {
                 die(a.verdict.code(), describe(&a.verdict))
@@ -630,7 +646,7 @@ fn run(cli: Cli) -> Result<()> {
             with_secret,
             net,
         } => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             println!(
                 "✓ lineage OK: S{} {} by {}",
@@ -681,7 +697,7 @@ fn run(cli: Cli) -> Result<()> {
             })?;
         }
         Cmd::Sync { other } => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             ctx.reconcile()?;
             let theirs = Store::open(&other, ctx.mem.capsule_id)?;
             let (m_in, b_in) = ctx.store.pull_from(&theirs)?;
@@ -691,7 +707,7 @@ fn run(cli: Cli) -> Result<()> {
             println!("  verdict: {}", describe(&a.verdict));
         }
         Cmd::Merge => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let a = ctx.assess()?;
             let Verdict::ForkMergeable { a: ha, b: hb, base } = a.verdict else {
                 die(a.verdict.code(), describe(&a.verdict))
@@ -728,7 +744,7 @@ fn run(cli: Cli) -> Result<()> {
             ctx.commit(body)?;
         }
         Cmd::Zewif { out } => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let (_, head) = ctx.head()?;
             let anchor = head
                 .body
@@ -765,7 +781,7 @@ fn run(cli: Cli) -> Result<()> {
             println!("{}", zewif_export::describe(&fs::read(&out)?)?);
         }
         Cmd::Log => {
-            let ctx = Ctx::load(home)?;
+            let ctx = Ctx::load(home, local)?;
             let a = ctx.assess()?;
             let mut ms: Vec<_> = a.valid.values().collect();
             ms.sort_by_key(|m| (m.body.seq, m.id()));
