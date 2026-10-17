@@ -44,6 +44,7 @@ fn world() -> World {
         ],
         anchor(100),
     )
+    .unwrap()
     .sign(&a);
     World { a, b, g }
 }
@@ -60,6 +61,7 @@ fn step(parent: &Manifest, who: &DeviceKeys, wallet: &str, labels: &str, h: u32)
         anchor(h),
         "step",
     )
+    .unwrap()
     .sign(who)
 }
 
@@ -155,6 +157,7 @@ fn concurrent_authority_change_is_conflict() {
         s1.body.anchor.clone(),
         "add tablet",
     )
+    .unwrap()
     .sign(&w.a);
     let xb = Body::child(
         &[&s1],
@@ -164,6 +167,7 @@ fn concurrent_authority_change_is_conflict() {
         s1.body.anchor.clone(),
         "revoke laptop",
     )
+    .unwrap()
     .sign(&w.b);
     let r = assess(vec![w.g.clone(), s1, xa, xb], w.g.id(), None);
     assert!(
@@ -180,7 +184,7 @@ fn unknown_device_and_tampering_are_rejected() {
     let mallory = DeviceKeys::generate("mallory");
     let evil = step(&w.g, &mallory, "db@999", "{}", 999);
     let mut tampered = step(&w.g, &w.a, "db@110", "{}", 110);
-    tampered.body.note = "edited after signing".into();
+    tampered.body.note = b"edited after signing".to_vec();
     let mut forged_root = step(&w.g, &w.a, "db@111", "{}", 111);
     forged_root.body.sections[0].plain = Hash::of(b"x", b"y");
     let r = assess(
@@ -215,6 +219,7 @@ fn revoked_device_cannot_author() {
         w.g.body.anchor.clone(),
         "revoke phone",
     )
+    .unwrap()
     .sign(&w.a);
     let s2 = step(&s1, &w.b, "db@200", "{}", 200);
     let r = assess(vec![w.g.clone(), s1.clone(), s2], w.g.id(), None);
@@ -259,6 +264,7 @@ fn conflict_is_settled_only_by_a_device_both_branches_trust() {
         s1.body.anchor.clone(),
         "add tablet",
     )
+    .unwrap()
     .sign(&w.a);
     let xb = Body::child(
         &[&s1],
@@ -268,6 +274,7 @@ fn conflict_is_settled_only_by_a_device_both_branches_trust() {
         s1.body.anchor.clone(),
         "revoke laptop",
     )
+    .unwrap()
     .sign(&w.b);
 
     // Laptop was revoked on xb, so its resolution has no standing there.
@@ -279,6 +286,7 @@ fn conflict_is_settled_only_by_a_device_both_branches_trust() {
         xa.body.anchor.clone(),
         "resolve",
     )
+    .unwrap()
     .sign(&w.a);
     let r = assess(
         vec![w.g.clone(), s1.clone(), xa.clone(), xb.clone(), by_laptop],
@@ -300,6 +308,7 @@ fn conflict_is_settled_only_by_a_device_both_branches_trust() {
         xb.body.anchor.clone(),
         "resolve",
     )
+    .unwrap()
     .sign(&w.b);
     let r = assess(
         vec![w.g.clone(), s1, xa, xb, by_phone.clone()],
@@ -312,4 +321,31 @@ fn conflict_is_settled_only_by_a_device_both_branches_trust() {
             head: by_phone.id()
         }
     );
+}
+
+#[test]
+fn notes_are_sealed_from_storage() {
+    let w = world();
+    let outsider = DeviceKeys::generate("relay");
+    let m = Body::child(
+        &[&w.g],
+        &w.a,
+        w.g.body.devices.clone(),
+        w.g.body.sections.clone(),
+        w.g.body.anchor.clone(),
+        "label contact:alice = u1alice",
+    )
+    .unwrap()
+    .sign(&w.a);
+    let stored = stored_bytes(&m);
+    assert!(!stored.windows(7).any(|x| x == b"u1alice"));
+    assert_eq!(
+        m.note(&w.b.identity()).as_deref(),
+        Some("label contact:alice = u1alice")
+    );
+    assert_eq!(m.note(&outsider.identity()), None);
+}
+
+fn stored_bytes(m: &Manifest) -> Vec<u8> {
+    hermit_kernel::hash::cbor(m)
 }

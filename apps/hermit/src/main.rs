@@ -295,9 +295,14 @@ impl Ctx {
         }
         let anchor = a.valid[&plan.anchor_from].body.anchor.clone();
         let parents = [&a.valid[&first], &a.valid[&second]];
-        Ok(Body::child(
-            &parents, &self.keys, devices, sections, anchor, note,
-        ))
+        Body::child(&parents, &self.keys, devices, sections, anchor, note)
+    }
+
+    /// A transition's note, or a placeholder when this device was not one
+    /// of its recipients (e.g. it was added later).
+    fn note(&self, m: &Manifest) -> String {
+        m.note(&self.keys.identity())
+            .unwrap_or_else(|| "(sealed)".into())
     }
 
     fn commit(&self, body: Body) -> Result<Manifest> {
@@ -315,7 +320,7 @@ impl Ctx {
             m.body.seq,
             m.id().short(),
             self.keys.name,
-            m.body.note
+            self.note(&m)
         );
         Ok(m)
     }
@@ -466,7 +471,7 @@ fn run(cli: Cli) -> Result<()> {
                 devices.clone(),
                 sections,
                 Some(cap.anchor.clone()),
-            );
+            )?;
             let g = body.sign(&keys);
             let real = Store::open(&store, g.body.capsule_id)?;
             for ct in sealed.take() {
@@ -559,7 +564,7 @@ fn run(cli: Cli) -> Result<()> {
                 sections,
                 Some(cap.anchor.clone()),
                 &note,
-            );
+            )?;
             ctx.commit(body)?;
             print_scan(&cap);
         }
@@ -597,7 +602,7 @@ fn run(cli: Cli) -> Result<()> {
                 sections,
                 head.body.anchor.clone(),
                 &note,
-            );
+            )?;
             ctx.commit(body)?;
         }
         Cmd::Labels => {
@@ -629,7 +634,7 @@ fn run(cli: Cli) -> Result<()> {
                 sections,
                 head.body.anchor.clone(),
                 &format!("authorize device {}", d.name),
-            );
+            )?;
             ctx.commit(body)?;
         }
         Cmd::Device(DeviceCmd::Revoke { name }) => {
@@ -655,7 +660,7 @@ fn run(cli: Cli) -> Result<()> {
                 sections,
                 head.body.anchor.clone(),
                 &format!("revoke device {name}"),
-            );
+            )?;
             ctx.commit(body)?;
         }
         Cmd::Status { net } => {
@@ -801,9 +806,9 @@ fn run(cli: Cli) -> Result<()> {
             println!(
                 "  keeping authority from {} ({}); discarding {} ({})",
                 kept.short(),
-                a.valid[&kept].body.note,
+                ctx.note(&a.valid[&kept]),
                 other.short(),
-                a.valid[&other].body.note
+                ctx.note(&a.valid[&other])
             );
             let note = format!("resolve: keep {} over {}", kept.short(), other.short());
             let body = ctx.merge_body(&a, kept, other, plan, devices, &note)?;
@@ -867,7 +872,7 @@ fn run(cli: Cli) -> Result<()> {
                     parents.join(","),
                     m.author_name(),
                     h,
-                    m.body.note
+                    ctx.note(m)
                 );
             }
             println!("verdict: {}", describe(&a.verdict));

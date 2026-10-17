@@ -95,6 +95,21 @@ pub(crate) mod hex_bytes {
     }
 }
 
+/// Serialize a byte vector as one CBOR byte string.
+pub(crate) mod bytes_vec {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(v)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let v: ciborium::Value = Deserialize::deserialize(d)?;
+        v.into_bytes()
+            .map_err(|_| serde::de::Error::custom("expected bytes"))
+    }
+}
+
 /// Deterministic CBOR: struct fields serialize in declaration order and the
 /// kernel only uses Vec/BTreeMap, so equal values always give equal bytes.
 pub fn cbor<T: serde::Serialize>(v: &T) -> Vec<u8> {

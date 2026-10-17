@@ -1,5 +1,6 @@
 use crate::device::{verify_sig, Device, DeviceKeys};
-use crate::hash::{cbor, hex_bytes, Hash};
+use crate::hash::{bytes_vec, cbor, hex_bytes, Hash};
+use crate::seal;
 use serde::{Deserialize, Serialize};
 
 /// How a section may evolve. This is the core of the continuity semantics.
@@ -54,7 +55,10 @@ pub struct Body {
     pub devices: Vec<Device>,
     #[serde(with = "hex_bytes")]
     pub author: [u8; 32],
-    pub note: String,
+    /// Human description of the transition, sealed to `devices` like every
+    /// section: storage must not learn labels or device actions from it.
+    #[serde(with = "bytes_vec")]
+    pub note: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,10 +103,11 @@ impl Body {
         devices: Vec<Device>,
         mut sections: Vec<SectionRef>,
         anchor: Option<Anchor>,
-    ) -> Body {
+    ) -> anyhow::Result<Body> {
         sections.sort_by(|a, b| a.name.cmp(&b.name));
+        let note = seal::seal(b"genesis", &devices)?;
         let capsule_id = Hash::of(b"ZcCapsule_id_v1", &rand::random::<[u8; 32]>());
-        Body {
+        Ok(Body {
             version: VERSION,
             capsule_id,
             seq: 0,
@@ -113,8 +118,8 @@ impl Body {
             sections,
             devices,
             author: author.public().sign_pk,
-            note: "genesis".into(),
-        }
+            note,
+        })
     }
 
     /// A successor of `parents` (one parent normally, two for a merge).
@@ -125,10 +130,11 @@ impl Body {
         mut sections: Vec<SectionRef>,
         anchor: Option<Anchor>,
         note: &str,
-    ) -> Body {
+    ) -> anyhow::Result<Body> {
         sections.sort_by(|a, b| a.name.cmp(&b.name));
+        let note = seal::seal(note.as_bytes(), &devices)?;
         let first = &parents[0].body;
-        Body {
+        Ok(Body {
             version: VERSION,
             capsule_id: first.capsule_id,
             seq: parents.iter().map(|p| p.body.seq).max().unwrap_or(0) + 1,
@@ -139,8 +145,8 @@ impl Body {
             sections,
             devices,
             author: author.public().sign_pk,
-            note: note.to_string(),
-        }
+            note,
+        })
     }
 
     pub fn id(&self) -> Hash {
@@ -187,6 +193,12 @@ impl Manifest {
             return Err("missing or invalid author signature".into());
         }
         Ok(())
+    }
+
+    /// The transition's note, if `identity` is one of its recipients.
+    pub fn note(&self, identity: &age::x25519::Identity) -> Option<String> {
+        let pt = seal::open(&self.body.note, identity).ok()?;
+        String::from_utf8(pt).ok()
     }
 
     pub fn author_name(&self) -> String {
