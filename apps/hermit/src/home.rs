@@ -37,6 +37,12 @@ impl Home {
         Ok(Home { dir: dir.to_owned() })
     }
 
+    /// This device's own copy of every manifest and blob it has seen or
+    /// written. Providers can withhold; they cannot make us forget.
+    pub fn replica(&self) -> String {
+        self.dir.join("replica").to_string_lossy().into_owned()
+    }
+
     pub fn keys(&self) -> Result<DeviceKeys> {
         let s = fs::read_to_string(self.dir.join("device.json"))
             .context("no device here; run `hermit device init` first")?;

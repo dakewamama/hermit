@@ -13,6 +13,8 @@ use hermit_kernel::assess::{assess, plan_merge, Assessment, HighWater, Resolutio
 use hermit_kernel::metadata::Labels;
 use hermit_kernel::{seal, Anchor, Body, Class, Device, DeviceKeys, Hash, Manifest, SectionRef};
 
+/// Same code the kernel uses for `Verdict::Rollback`.
+const EXIT_ROLLBACK: i32 = 20;
 const EXIT_ANCHOR_MISMATCH: i32 = 23;
 
 #[derive(Parser)]
@@ -124,6 +126,9 @@ struct Ctx {
     home: Home,
     keys: DeviceKeys,
     mem: Membership,
+    /// The provider. Untrusted, possibly stale or censoring.
+    remote: Store,
+    /// This device's replica. Everything is read from here after reconciling.
     store: Store,
 }
 
@@ -131,14 +136,45 @@ impl Ctx {
     fn load(home: Home) -> Result<Ctx> {
         let keys = home.keys()?;
         let mem = home.membership()?;
-        let store = Store::open(&mem.store, mem.capsule_id)?;
-        Ok(Ctx { home, keys, mem, store })
+        let remote = Store::open(&mem.store, mem.capsule_id)?;
+        let store = Store::open(&home.replica(), mem.capsule_id)?;
+        Ok(Ctx { home, keys, mem, remote, store })
+    }
+
+    /// Pull what the provider has, republish what it lacks, and report
+    /// anything it still withholds afterwards.
+    fn reconcile(&self) -> Result<Vec<String>> {
+        self.store.pull_from(&self.remote)?;
+        self.remote.pull_from(&self.store)?;
+        let theirs = self.remote.manifest_ids()?;
+        let mut missing: Vec<String> = self
+            .store
+            .manifest_ids()?
+            .into_iter()
+            .filter(|id| !theirs.contains(id))
+            .collect();
+        missing.sort();
+        Ok(missing)
     }
 
     fn assess(&self) -> Result<Assessment> {
+        let withheld = self.reconcile()?;
         let a = assess(self.store.list_manifests()?, self.mem.genesis, self.mem.hwm);
         for (id, why) in &a.rejected {
             println!("  ✗ rejected {}: {why}", id.short());
+        }
+        if !withheld.is_empty() {
+            let ids: Vec<&str> = withheld.iter().map(|s| &s[..8]).collect();
+            die(
+                EXIT_ROLLBACK,
+                format!(
+                    "ROLLBACK DETECTED: provider {} withholds {} manifest(s) this device holds [{}]\n\
+                     republish was accepted but not served; local state is intact",
+                    self.mem.store,
+                    withheld.len(),
+                    ids.join(", ")
+                ),
+            );
         }
         Ok(a)
     }
@@ -187,6 +223,7 @@ impl Ctx {
     fn commit(&self, body: Body) -> Result<Manifest> {
         let m = body.sign(&self.keys);
         self.store.put_manifest(&m)?;
+        self.remote.pull_from(&self.store)?;
         self.home.set_hwm(HighWater { seq: m.body.seq, id: m.id() })?;
         println!(
             "✓ S{} {} by {} — {}",
@@ -312,16 +349,18 @@ fn run(cli: Cli) -> Result<()> {
             let keys = home.keys()?;
             let cap = zcash::capture(&wallet, &scratch(&home)?)?;
             let devices = vec![keys.public()];
-            // The capsule id is only known after building genesis, so seal into
-            // a staging store first and move blobs once the id exists.
-            let staging = Store::open(&store, Hash([0; 32]))?;
+            // The capsule id is only known after genesis is built, so seal in
+            // memory and upload once there is somewhere to put the blobs.
+            let sealed = std::cell::RefCell::new(Vec::new());
             let put = |name: &str, class: Class, pt: &[u8]| -> Result<SectionRef> {
                 let ct = seal::seal(pt, &devices)?;
+                let blob = Hash::of(b"ZcBlob_v1", &ct);
+                sealed.borrow_mut().push(ct);
                 Ok(SectionRef {
                     name: name.into(),
                     class,
                     plain: Hash::of(b"ZcPlain_v1", pt),
-                    blob: staging.put_blob(&ct)?,
+                    blob,
                     len: pt.len() as u64,
                 })
             };
@@ -330,11 +369,12 @@ fn run(cli: Cli) -> Result<()> {
             let body = Body::genesis("zcash/v1", &keys, devices.clone(), sections, Some(cap.anchor.clone()));
             let g = body.sign(&keys);
             let real = Store::open(&store, g.body.capsule_id)?;
-            for s in &g.body.sections {
-                real.put_blob(&staging.get_blob(s.blob)?)?;
+            for ct in sealed.take() {
+                real.put_blob(&ct)?;
             }
-            fs::remove_dir_all(PathBuf::from(store.trim_start_matches("dir://")).join(Hash([0; 32]).hex()))?;
             real.put_manifest(&g)?;
+            let replica = Store::open(&home.replica(), g.body.capsule_id)?;
+            replica.pull_from(&real)?;
             home.save_membership(&Membership {
                 capsule_id: g.body.capsule_id,
                 genesis: g.id(),
@@ -488,6 +528,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Sync { other } => {
             let ctx = Ctx::load(home)?;
+            ctx.reconcile()?;
             let theirs = Store::open(&other, ctx.mem.capsule_id)?;
             let (m_in, b_in) = ctx.store.pull_from(&theirs)?;
             let (m_out, b_out) = theirs.pull_from(&ctx.store)?;
