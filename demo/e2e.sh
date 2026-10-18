@@ -5,31 +5,18 @@
 #
 #   DEVTOOL=/path/to/zcash-devtool demo/e2e.sh
 #
-# Needs network access to testnet.zec.rocks (or set SERVER).
+# Needs network access to testnet.zec.rocks (or set SERVER). Runs its own
+# relay and witness unless RELAY / WITNESS / ADMIN_TOKEN name deployed ones.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 HERMIT=${HERMIT:-$ROOT/target/debug/hermit}
 DEVTOOL=${DEVTOOL:?set DEVTOOL to a zcash-devtool binary}
-RELAY_BIN=${RELAY_BIN:-$ROOT/target/debug/hermit-relay}
 SERVER=${SERVER:-https://testnet.zec.rocks:443}
-PORT=${PORT:-8787}
-RELAY=http://127.0.0.1:$PORT
 WORK=$(mktemp -d)
 cd "$WORK"
-"$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data --demo-admin >relay.log 2>&1 &
-RELAY_PID=$!
-WITNESS_BIN=${WITNESS_BIN:-$ROOT/target/debug/hermit-witness}
-WITNESS=http://127.0.0.1:$((PORT + 1))
-"$WITNESS_BIN" --listen "127.0.0.1:$((PORT + 1))" --data witness-data >witness.log 2>&1 &
-WITNESS_PID=$!
-trap 'kill $RELAY_PID $WITNESS_PID 2>/dev/null; echo "workdir: $WORK"' EXIT
-relay_mode() { curl -sf -X POST "$RELAY/admin/mode" -d "$1" >/dev/null && echo "(relay is now: $1)"; }
-sleep 1
-# A server that failed to bind exits at once; never run against a stale one.
-for pid in $RELAY_PID $WITNESS_PID; do
-  kill -0 "$pid" 2>/dev/null || { echo "FAIL: server exited at startup:"; cat relay.log witness.log; exit 1; }
-done
+source "$ROOT/demo/servers.sh"
+trap 'stop_servers; echo "workdir: $WORK"' EXIT
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 expect() { # expect <code> <cmd...>

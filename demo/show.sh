@@ -8,20 +8,15 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 HERMIT=${HERMIT:-$ROOT/target/debug/hermit}
-RELAY_BIN=${RELAY_BIN:-$ROOT/target/debug/hermit-relay}
 DEVTOOL=${DEVTOOL:?set DEVTOOL to a zcash-devtool binary}
 WALLET=$(realpath "${WALLET:?set WALLET to a synced devtool wallet dir}")
 IDENTITY=$(realpath "${IDENTITY:?set IDENTITY to the wallet age identity}")
-PORT=${PORT:-8787}
-RELAY=http://127.0.0.1:$PORT
 PACE=${PACE:-1}
 
 WORK=$(mktemp -d)
 cd "$WORK"
-"$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data --demo-admin >relay.log 2>&1 &
-RELAY_PID=$!
-trap 'kill $RELAY_PID 2>/dev/null' EXIT
-sleep 1
+source "$ROOT/demo/servers.sh"
+trap stop_servers EXIT
 
 bold=$'\033[1m' dim=$'\033[2m' off=$'\033[0m'
 scene() { printf '\n%s━━ %s%s\n' "$bold" "$*" "$off"; }
@@ -41,12 +36,13 @@ wallet -w "$WALLET" list-addresses | grep "Default Address"
 pause
 
 scene "2. Seal its state into a capsule on an untrusted relay"
-run "$HERMIT" --home laptop create --wallet "$WALLET" --store "$RELAY"
-say "what the relay holds:"
-cap=$(ls relay-data)
-ls -la "relay-data/$cap/b" | tail -n +2 | awk '{print "  " $5 " bytes  " $9}'
-blob=$(ls "relay-data/$cap/b" | head -1)
-head -c 120 "relay-data/$cap/b/$blob" | xxd | head -4
+run "$HERMIT" --home laptop create --wallet "$WALLET" --store "$RELAY" --witness "$WITNESS"
+say "what anyone fetching from the relay gets:"
+cap=$(jq -r .capsule_id laptop/capsule.json)
+for blob in $(curl -sf "$RELAY/c/$cap/b"); do
+  printf '  %10s bytes  %s\n' "$(curl -sf "$RELAY/c/$cap/b/$blob" | wc -c)" "$blob"
+done
+curl -sf "$RELAY/c/$cap/b/$blob" | head -c 120 | xxd | head -4
 pause
 
 scene "3. A new phone joins and restores. No seed, no birthday, no rescan"
@@ -66,10 +62,10 @@ run "$DEVTOOL" wallet -w phone-wallet display-mnemonic --enable -i "$IDENTITY" 2
 pause
 
 scene "5. The relay goes stale and silently drops a write"
-curl -sf -X POST "$RELAY/admin/mode" -d freeze >/dev/null && say "(relay: freeze)"
+relay_mode freeze
 run "$HERMIT" --home laptop label contact:alice u1alice
 attempt "$HERMIT" --home laptop status --offline
-curl -sf -X POST "$RELAY/admin/mode" -d honest >/dev/null && say "(relay: honest)"
+relay_mode honest
 run "$HERMIT" --home laptop status --offline
 pause
 

@@ -1,19 +1,19 @@
 //! A deliberately dumb relay: it stores whatever it is given and lists
-//! whatever it has. Clients trust none of it. Started with --demo-admin it
-//! can be switched at runtime into hostile modes:
+//! whatever it has. Clients trust none of it. Started with an admin token it
+//! can be switched at runtime into hostile modes, for demonstrations:
 //!
 //!   honest   serve everything (default)
 //!   freeze   keep serving the manifest set as of the switch; accept and
 //!            silently drop new writes (a stale or censoring provider)
 //!   corrupt  flip a byte in every blob served
 //!
-//!   curl -X POST localhost:8787/admin/mode -d freeze
+//!   curl -X POST localhost:8787/admin/mode -H "Authorization: Bearer $TOKEN" -d freeze
 
 use axum::{
     body::Bytes,
     extract::DefaultBodyLimit,
     extract::{Path, State},
-    http::StatusCode,
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     routing::{get, post},
     Router,
 };
@@ -30,10 +30,11 @@ struct Args {
     listen: String,
     #[arg(long, default_value = "relay-data")]
     data: PathBuf,
-    /// Expose the unauthenticated /admin/mode endpoint that makes the relay
-    /// misbehave on request. For demonstrations only.
-    #[arg(long)]
-    demo_admin: bool,
+    /// Enables /admin/mode, which makes the relay misbehave on request, for
+    /// callers presenting this bearer token. Without it the route does not
+    /// exist. For demonstrations only.
+    #[arg(long, env = "HERMIT_ADMIN_TOKEN", hide_env_values = true)]
+    admin_token: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +49,24 @@ enum Mode {
 struct Relay {
     data: PathBuf,
     mode: Arc<Mutex<Mode>>,
+    admin_token: Option<Arc<str>>,
+}
+
+/// Constant-time check of an `Authorization: Bearer <token>` header.
+fn authorized(headers: &HeaderMap, token: &str) -> bool {
+    let Some(given) = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    else {
+        return false;
+    };
+    given.len() == token.len()
+        && given
+            .bytes()
+            .zip(token.bytes())
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
 }
 
 fn valid_name(s: &str) -> bool {
@@ -144,7 +163,15 @@ async fn store(
     Ok(StatusCode::CREATED)
 }
 
-async fn set_mode(State(r): State<Relay>, body: String) -> Result<String, StatusCode> {
+async fn set_mode(
+    State(r): State<Relay>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<String, StatusCode> {
+    match &r.admin_token {
+        Some(t) if authorized(&headers, t) => {}
+        _ => return Err(StatusCode::UNAUTHORIZED),
+    }
     let mode = match body.trim() {
         "honest" => Mode::Honest,
         "freeze" => Mode::Freeze(r.all_manifests().await),
@@ -164,12 +191,13 @@ async fn main() -> anyhow::Result<()> {
     let relay = Relay {
         data: args.data,
         mode: Arc::new(Mutex::new(Mode::Honest)),
+        admin_token: args.admin_token.filter(|t| !t.is_empty()).map(Arc::from),
     };
     let mut app = Router::new()
         .route("/c/{cap}/{kind}", get(list))
         .route("/c/{cap}/{kind}/{name}", get(fetch).put(store));
-    if args.demo_admin {
-        println!("WARNING: /admin/mode is enabled; anyone who can reach this relay can make it misbehave");
+    if relay.admin_token.is_some() {
+        println!("/admin/mode enabled (token required)");
         app = app.route("/admin/mode", post(set_mode));
     }
     let app = app
@@ -190,7 +218,28 @@ mod tests {
         Relay {
             data: PathBuf::from("/srv/relay"),
             mode: Arc::new(Mutex::new(Mode::Honest)),
+            admin_token: None,
         }
+    }
+
+    #[test]
+    fn admin_needs_the_exact_bearer_token() {
+        let with = |v: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(AUTHORIZATION, v.parse().unwrap());
+            h
+        };
+        assert!(authorized(&with("Bearer s3cret"), "s3cret"));
+        for bad in [
+            "Bearer s3cre",
+            "Bearer s3cret!",
+            "bearer s3cret",
+            "s3cret",
+            "Basic s3cret",
+        ] {
+            assert!(!authorized(&with(bad), "s3cret"), "{bad}");
+        }
+        assert!(!authorized(&HeaderMap::new(), "s3cret"));
     }
 
     #[test]
