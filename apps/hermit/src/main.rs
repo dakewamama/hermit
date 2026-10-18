@@ -140,15 +140,44 @@ enum DeviceCmd {
 
 fn main() {
     let cli = Cli::parse();
+    // The only exit point: everything (temporary directories holding
+    // decrypted wallet data included) has been dropped by the time we leave.
     if let Err(e) = run(cli) {
-        eprintln!("error: {e:#}");
-        std::process::exit(1);
+        match e.downcast_ref::<Refusal>() {
+            Some(r) => {
+                eprintln!("{}", r.msg);
+                std::process::exit(r.code);
+            }
+            None => {
+                eprintln!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
-fn die(code: i32, msg: String) -> ! {
-    eprintln!("{msg}");
-    std::process::exit(code);
+/// A deliberate refusal (rollback, fork, conflict, off-chain anchor) that
+/// carries its own exit code, as opposed to an operational error (exit 1).
+#[derive(Debug)]
+struct Refusal {
+    code: i32,
+    msg: String,
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.msg)
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+fn refuse(code: i32, msg: String) -> anyhow::Error {
+    Refusal { code, msg }.into()
+}
+
+fn refuse_verdict(v: &Verdict) -> anyhow::Error {
+    refuse(v.code(), describe(v))
 }
 
 struct Ctx {
@@ -209,21 +238,23 @@ impl Ctx {
         }
         if let (Some(w), Some(_)) = (&self.mem.witness, &self.remote) {
             match w.latest(self.mem.capsule_id) {
-                Ok(Some(s)) if !a.valid.contains_key(&s.att.head) => die(
-                    EXIT_ROLLBACK,
-                    format!(
-                        "ROLLBACK DETECTED: witness attests S{} {} but the provider does not serve it",
-                        s.att.seq,
-                        s.att.head.short()
-                    ),
-                ),
+                Ok(Some(s)) if !a.valid.contains_key(&s.att.head) => {
+                    return Err(refuse(
+                        EXIT_ROLLBACK,
+                        format!(
+                            "ROLLBACK DETECTED: witness attests S{} {} but the provider does not serve it",
+                            s.att.seq,
+                            s.att.head.short()
+                        ),
+                    ))
+                }
                 Ok(_) => {}
                 Err(e) => println!("  ! {e}; freshness not verified"),
             }
         }
         if !withheld.is_empty() {
             let ids: Vec<&str> = withheld.iter().map(|s| &s[..8]).collect();
-            die(
+            return Err(refuse(
                 EXIT_ROLLBACK,
                 format!(
                     "ROLLBACK DETECTED: provider {} withholds {} manifest(s) this device holds [{}]\n\
@@ -232,12 +263,12 @@ impl Ctx {
                     withheld.len(),
                     ids.join(", ")
                 ),
-            );
+            ));
         }
         Ok(a)
     }
 
-    /// The single verified head, or exit with the verdict's code.
+    /// The single verified head, or a refusal carrying the verdict's code.
     fn head(&self) -> Result<(Assessment, Manifest)> {
         let a = self.assess()?;
         match a.verdict {
@@ -245,7 +276,7 @@ impl Ctx {
                 let m = a.valid[&head].clone();
                 Ok((a, m))
             }
-            ref v => die(v.code(), describe(v)),
+            ref v => Err(refuse_verdict(v)),
         }
     }
 
@@ -439,15 +470,17 @@ fn verify_anchor(anchor: Option<&Anchor>, net: &Net) -> Result<Option<(chain::Ch
             &chain::display_hash(&anchor.block_hash)[..16],
             anchor.height
         ),
-        Some(actual) => die(
-            EXIT_ANCHOR_MISMATCH,
-            format!(
-                "ANCHOR MISMATCH: block {} at height {} is not on chain (chain has {})",
-                chain::display_hash(&anchor.block_hash),
-                anchor.height,
-                chain::display_hash(&actual)
-            ),
-        ),
+        Some(actual) => {
+            return Err(refuse(
+                EXIT_ANCHOR_MISMATCH,
+                format!(
+                    "ANCHOR MISMATCH: block {} at height {} is not on chain (chain has {})",
+                    chain::display_hash(&anchor.block_hash),
+                    anchor.height,
+                    chain::display_hash(&actual)
+                ),
+            ))
+        }
     }
     let tip = c.tip()?;
     Ok(Some((c, tip)))
@@ -720,7 +753,7 @@ fn run(cli: Cli) -> Result<()> {
             let ctx = Ctx::load(home, local)?;
             let a = ctx.assess()?;
             let Verdict::Ok { head } = a.verdict else {
-                die(a.verdict.code(), describe(&a.verdict))
+                return Err(refuse_verdict(&a.verdict));
             };
             let m = &a.valid[&head];
             println!(
@@ -816,7 +849,7 @@ fn run(cli: Cli) -> Result<()> {
             let ctx = Ctx::load(home, local)?;
             let a = ctx.assess()?;
             let Verdict::ForkMergeable { a: ha, b: hb, base } = a.verdict else {
-                die(a.verdict.code(), describe(&a.verdict))
+                return Err(refuse_verdict(&a.verdict));
             };
             let plan = plan_merge(&a.valid, ha, hb, base);
             let devices = a.valid[&plan.devices_from].body.devices.clone();
@@ -834,7 +867,7 @@ fn run(cli: Cli) -> Result<()> {
                 ref reason,
             } = a.verdict
             else {
-                die(a.verdict.code(), describe(&a.verdict))
+                return Err(refuse_verdict(&a.verdict));
             };
             let (kept, other) = match (ha.hex().starts_with(&keep), hb.hex().starts_with(&keep)) {
                 (true, false) => (ha, hb),
