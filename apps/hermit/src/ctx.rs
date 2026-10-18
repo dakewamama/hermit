@@ -221,6 +221,9 @@ impl Ctx {
 
     pub fn commit(&self, body: Body) -> Result<Manifest> {
         let m = body.sign(&self.keys);
+        // Never publish what every other device would reject.
+        m.check_self()
+            .map_err(|e| anyhow::anyhow!("refusing to publish an invalid transition: {e}"))?;
         // Cosign before anything is stored, so a refused transition leaves no
         // trace. Local work is cosigned later, by whatever builds on it.
         if let (Some(w), Some(_)) = (&self.mem.witness, &self.remote) {

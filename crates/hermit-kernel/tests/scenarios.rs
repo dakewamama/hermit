@@ -349,3 +349,41 @@ fn notes_are_sealed_from_storage() {
 fn stored_bytes(m: &Manifest) -> Vec<u8> {
     hermit_kernel::hash::cbor(m)
 }
+
+#[test]
+fn device_sets_must_be_unambiguous() {
+    let w = world();
+    let other_phone = DeviceKeys::generate("phone");
+    let mut twice_named = w.g.body.devices.clone();
+    twice_named.push(other_phone.public());
+    let mut twice_keyed = w.g.body.devices.clone();
+    let mut renamed = w.a.public();
+    renamed.name = "laptop-2".into();
+    twice_keyed.push(renamed);
+    let mut unnamed = w.g.body.devices.clone();
+    unnamed[1].name = " ".into();
+
+    for (devices, why) in [
+        (twice_named, "used twice"),
+        (twice_keyed, "used twice"),
+        (unnamed, "empty name"),
+        (vec![], "empty"),
+    ] {
+        let m = Body::child(
+            &[&w.g],
+            &w.a,
+            devices.clone(),
+            w.g.body.sections.clone(),
+            w.g.body.anchor.clone(),
+            "authority change",
+        );
+        // An empty set cannot even be sealed to; anything else must be
+        // rejected by the kernel, not just by a well-behaved client.
+        let Ok(body) = m else {
+            assert!(devices.is_empty());
+            continue;
+        };
+        let err = body.sign(&w.a).check_self().unwrap_err();
+        assert!(err.contains(why), "{err}");
+    }
+}

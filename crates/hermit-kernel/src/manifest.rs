@@ -93,6 +93,28 @@ pub fn state_root(sections: &[SectionRef]) -> Hash {
     Hash::of(b"ZcState_root_v1", &cbor(&leaves))
 }
 
+/// Authority is by key, but people revoke by name, so a device set must not
+/// let one name (or one key) stand for two devices.
+fn check_devices(devices: &[Device]) -> Result<(), String> {
+    if devices.is_empty() {
+        return Err("device set is empty".into());
+    }
+    let mut names = std::collections::BTreeSet::new();
+    let mut keys = std::collections::BTreeSet::new();
+    for d in devices {
+        if d.name.trim().is_empty() {
+            return Err("device with an empty name".into());
+        }
+        if !names.insert(d.name.as_str()) {
+            return Err(format!("device name '{}' used twice", d.name));
+        }
+        if !keys.insert(d.sign_pk) {
+            return Err(format!("device key of '{}' used twice", d.name));
+        }
+    }
+    Ok(())
+}
+
 pub fn devices_hash(devices: &[Device]) -> Hash {
     Hash::of(b"ZcDevices_v1", &cbor(&devices))
 }
@@ -185,6 +207,7 @@ impl Manifest {
         if !b.sections.windows(2).all(|w| w[0].name < w[1].name) {
             return Err("sections not strictly sorted".into());
         }
+        check_devices(&b.devices)?;
         let id = self.id();
         let signed = self
             .evidence

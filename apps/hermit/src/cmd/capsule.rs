@@ -141,6 +141,12 @@ pub fn device_add(ctx: &Ctx, device: &Path) -> Result<()> {
         !head.body.devices.iter().any(|x| x.sign_pk == d.sign_pk),
         "device already authorized"
     );
+    anyhow::ensure!(
+        !head.body.devices.iter().any(|x| x.name == d.name),
+        "a device named '{}' is already authorized; device names must be unique \
+         because revocation is by name",
+        d.name
+    );
     let mut devices = head.body.devices.clone();
     devices.push(d.clone());
     let sections = ctx.reseal_all(&head.body.sections, &devices)?;
