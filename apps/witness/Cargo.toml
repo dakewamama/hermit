@@ -1,0 +1,17 @@
+[package]
+name = "hermit-witness"
+version = "0.1.0"
+edition = "2021"
+description = "Freshness witness for hermit capsules: signs the newest head it has seen, never an older one"
+
+[dependencies]
+hermit-kernel = { path = "../../crates/hermit-kernel" }
+anyhow.workspace = true
+hex.workspace = true
+serde.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net"] }
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"

@@ -1451,6 +1451,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermit-witness"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "ed25519-dalek",
+ "hermit-kernel",
+ "hex",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
