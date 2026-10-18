@@ -30,6 +30,15 @@ impl Attestation {
     }
 }
 
+/// What a client sends to have `tip` attested: the tip and the manifests it
+/// descends from, so the witness can verify lineage from the capsule's
+/// genesis instead of trusting a signed sequence number.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CosignRequest {
+    pub tip: Manifest,
+    pub ancestry: Vec<Manifest>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signed {
     pub att: Attestation,

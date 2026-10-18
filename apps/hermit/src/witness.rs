@@ -4,7 +4,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use hermit_kernel::hash::cbor;
-use hermit_kernel::witness::{Attestation, Signed};
+use hermit_kernel::witness::{Attestation, CosignRequest, Signed};
 use hermit_kernel::{Hash, Manifest};
 use serde::{Deserialize, Serialize};
 
@@ -52,10 +52,16 @@ impl WitnessPin {
         Ok(s)
     }
 
-    /// Ask the witness to attest `m` as the newest head.
-    pub fn cosign(&self, m: &Manifest) -> Result<Signed> {
+    /// Ask the witness to attest `m` as the newest head. `ancestry` must let
+    /// the witness trace `m` back to the capsule's genesis; it ignores
+    /// anything that doesn't.
+    pub fn cosign(&self, m: &Manifest, ancestry: Vec<Manifest>) -> Result<Signed> {
         let cap = m.body.capsule_id;
-        match ureq::post(&format!("{}/cosign", self.url)).send_bytes(&cbor(m)) {
+        let req = CosignRequest {
+            tip: m.clone(),
+            ancestry,
+        };
+        match ureq::post(&format!("{}/cosign", self.url)).send_bytes(&cbor(&req)) {
             Ok(resp) => {
                 let s = self.checked(&resp.into_string()?, cap)?;
                 anyhow::ensure!(

@@ -67,7 +67,7 @@ pub fn create(
     )?
     .sign(&keys);
     if let Some(w) = &witness {
-        w.cosign(&g)?;
+        w.cosign(&g, vec![])?;
         println!("  ✓ witness {} pinned and cosigned genesis", &w.key[..16]);
     }
     let real = Store::open(&store, g.body.capsule_id)?;

@@ -2,12 +2,15 @@
 //!
 //!   GET  /key               this witness's public key (hex)
 //!   GET  /latest/{capsule}  newest attestation, or 404
-//!   POST /cosign            body: a CBOR manifest; returns an attestation,
-//!                           or 409 with the newer one this witness holds
+//!   POST /cosign            body: a CBOR CosignRequest (tip + ancestry);
+//!                           returns an attestation, or 409 with the newer
+//!                           one this witness holds
 //!
-//! It cosigns only manifests signed by a device that the previously cosigned
-//! state authorized (genesis on first contact), so nobody without a device
-//! key can push a fake "newer" head and freeze the capsule.
+//! First contact for a capsule must be its genesis, which the witness then
+//! pins. After that it runs the kernel's own lineage verification over the
+//! submitted ancestry and only attests a tip that is valid from that genesis
+//! and descends from what it last attested. A signature alone is never
+//! enough: a stolen device key cannot make it attest a sequence jump.
 
 use axum::{
     body::Bytes,
@@ -19,9 +22,10 @@ use axum::{
 };
 use clap::Parser;
 use ed25519_dalek::SigningKey;
+use hermit_kernel::assess::{ancestors, assess};
 use hermit_kernel::hash::from_cbor;
-use hermit_kernel::witness::{Attestation, Signed};
-use hermit_kernel::{Device, Manifest};
+use hermit_kernel::witness::{Attestation, CosignRequest, Signed};
+use hermit_kernel::Hash;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -35,12 +39,12 @@ struct Args {
     data: PathBuf,
 }
 
-/// What the witness remembers per capsule: the newest attestation and who
-/// may author the next one.
+/// What the witness remembers per capsule: its genesis and the newest
+/// attestation.
 #[derive(Clone, Serialize, Deserialize)]
 struct Entry {
+    genesis: Hash,
     latest: Attestation,
-    devices: Vec<Device>,
 }
 
 #[derive(Clone)]
@@ -57,22 +61,30 @@ enum Decision {
 }
 
 /// The witness's whole policy, kept pure so it can be tested directly.
-fn decide(prev: Option<&Entry>, m: &Manifest) -> Decision {
-    if m.check_self().is_err() {
+fn decide(prev: Option<&Entry>, req: &CosignRequest) -> Decision {
+    let tip = &req.tip;
+    if tip.check_self().is_err() {
         return Decision::Reject("manifest signature or structure is invalid");
     }
     let Some(prev) = prev else {
-        return if m.body.seq == 0 && m.body.parents.is_empty() {
+        let b = &tip.body;
+        return if b.seq == 0
+            && b.parents.is_empty()
+            && b.devices.iter().any(|d| d.sign_pk == b.author)
+        {
             Decision::Accept
         } else {
             Decision::Reject("first contact for a capsule must be its genesis")
         };
     };
-    if !prev.devices.iter().any(|d| d.sign_pk == m.body.author) {
-        return Decision::Reject("author is not authorized by the last witnessed state");
+    let mut offered = req.ancestry.clone();
+    offered.push(tip.clone());
+    let a = assess(offered, prev.genesis, None);
+    let id = tip.id();
+    if !a.valid.contains_key(&id) {
+        return Decision::Reject("tip is not valid lineage from this capsule's genesis");
     }
-    let att = Attestation::of(m);
-    if att.seq > prev.latest.seq || att == prev.latest {
+    if Attestation::of(tip) == prev.latest || ancestors(&a.valid, id).contains(&prev.latest.head) {
         Decision::Accept
     } else {
         Decision::Stale(prev.latest)
@@ -101,16 +113,18 @@ async fn latest(State(w): State<Witness>, Path(cap): Path<String>) -> Response {
 }
 
 async fn cosign(State(w): State<Witness>, body: Bytes) -> Response {
-    let Ok(m) = from_cbor::<Manifest>(&body) else {
-        return (StatusCode::BAD_REQUEST, "not a manifest").into_response();
+    let Ok(req) = from_cbor::<CosignRequest>(&body) else {
+        return (StatusCode::BAD_REQUEST, "not a cosign request").into_response();
     };
+    let m = &req.tip;
     let cap = m.body.capsule_id.hex();
     let mut state = w.state.lock().unwrap();
-    match decide(state.get(&cap), &m) {
+    let prev = state.get(&cap).cloned();
+    match decide(prev.as_ref(), &req) {
         Decision::Accept => {
             let entry = Entry {
-                latest: Attestation::of(&m),
-                devices: m.body.devices.clone(),
+                genesis: prev.map(|e| e.genesis).unwrap_or_else(|| m.id()),
+                latest: Attestation::of(m),
             };
             state.insert(cap, entry.clone());
             if let Err(e) = w.persist(&state) {
@@ -176,7 +190,7 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermit_kernel::{Body, DeviceKeys};
+    use hermit_kernel::{Body, DeviceKeys, Manifest};
 
     fn genesis(k: &DeviceKeys) -> Manifest {
         Body::genesis("zcash/v1", k, vec![k.public()], vec![], None)
@@ -197,10 +211,17 @@ mod tests {
         .sign(k)
     }
 
-    fn entry(m: &Manifest) -> Entry {
+    fn entry(genesis: &Manifest, latest: &Manifest) -> Entry {
         Entry {
-            latest: Attestation::of(m),
-            devices: m.body.devices.clone(),
+            genesis: genesis.id(),
+            latest: Attestation::of(latest),
+        }
+    }
+
+    fn req(tip: &Manifest, ancestry: &[&Manifest]) -> CosignRequest {
+        CosignRequest {
+            tip: tip.clone(),
+            ancestry: ancestry.iter().map(|m| (*m).clone()).collect(),
         }
     }
 
@@ -211,39 +232,98 @@ mod tests {
         let g = genesis(&a);
         let s1 = next(&g, &a, "one");
         let s1b = next(&g, &a, "fork");
+        let s2 = next(&s1, &a, "two");
 
-        assert!(matches!(decide(None, &g), Decision::Accept));
+        assert!(matches!(decide(None, &req(&g, &[])), Decision::Accept));
         assert!(
-            matches!(decide(None, &s1), Decision::Reject(_)),
+            matches!(decide(None, &req(&s1, &[&g])), Decision::Reject(_)),
             "first contact must be genesis"
         );
 
-        let e = entry(&s1);
+        let e = entry(&g, &s1);
         assert!(
-            matches!(decide(Some(&e), &s1), Decision::Accept),
+            matches!(decide(Some(&e), &req(&s1, &[&g])), Decision::Accept),
             "re-sign same head"
         );
         assert!(matches!(
-            decide(Some(&e), &next(&s1, &a, "two")),
+            decide(Some(&e), &req(&s2, &[&g, &s1])),
             Decision::Accept
         ));
         assert!(
-            matches!(decide(Some(&e), &g), Decision::Stale(l) if l == e.latest),
+            matches!(decide(Some(&e), &req(&g, &[])), Decision::Stale(l) if l == e.latest),
             "never go back"
         );
         assert!(
-            matches!(decide(Some(&e), &s1b), Decision::Stale(_)),
+            matches!(decide(Some(&e), &req(&s1b, &[&g])), Decision::Stale(_)),
             "never two heads at one seq"
+        );
+        assert!(
+            matches!(decide(Some(&e), &req(&s2, &[&s1])), Decision::Reject(_)),
+            "ancestry must reach the pinned genesis"
         );
 
         // Someone without a device key cannot push the capsule forward.
         let forged = Body::child(&[&s1], &mallory, s1.body.devices.clone(), vec![], None, "x")
             .unwrap()
             .sign(&mallory);
-        assert!(matches!(decide(Some(&e), &forged), Decision::Reject(_)));
-        let mut tampered = next(&s1, &a, "two");
+        assert!(matches!(
+            decide(Some(&e), &req(&forged, &[&g, &s1])),
+            Decision::Reject(_)
+        ));
+        let mut tampered = s2.clone();
         tampered.body.seq = 99;
-        assert!(matches!(decide(Some(&e), &tampered), Decision::Reject(_)));
+        assert!(matches!(
+            decide(Some(&e), &req(&tampered, &[&g, &s1])),
+            Decision::Reject(_)
+        ));
+    }
+
+    #[test]
+    fn a_merge_of_offline_branches_is_attested() {
+        let a = DeviceKeys::generate("laptop");
+        let g = genesis(&a);
+        let s1 = next(&g, &a, "online");
+        // Two branches written offline, never seen by the witness.
+        let xa = next(&s1, &a, "offline a");
+        let xb = next(&s1, &a, "offline b");
+        let m = Body::child(
+            &[&xa, &xb],
+            &a,
+            s1.body.devices.clone(),
+            vec![],
+            None,
+            "merge",
+        )
+        .unwrap()
+        .sign(&a);
+        let e = entry(&g, &s1);
+        assert!(matches!(
+            decide(Some(&e), &req(&m, &[&g, &s1, &xa, &xb])),
+            Decision::Accept
+        ));
+    }
+
+    #[test]
+    fn an_authorized_device_cannot_jump_the_sequence() {
+        let a = DeviceKeys::generate("laptop");
+        let g = genesis(&a);
+        let s1 = next(&g, &a, "one");
+        // Validly signed by an authorized device, but not valid lineage.
+        let mut body =
+            Body::child(&[&s1], &a, s1.body.devices.clone(), vec![], None, "jump").unwrap();
+        body.seq = 1_000_000_000;
+        let jump = body.sign(&a);
+        assert!(
+            jump.check_self().is_ok(),
+            "signature and structure are fine"
+        );
+        assert!(
+            matches!(
+                decide(Some(&entry(&g, &s1)), &req(&jump, &[&g, &s1])),
+                Decision::Reject(_)
+            ),
+            "a seq jump would freeze every honest writer and alarm every reader"
+        );
     }
 
     #[test]

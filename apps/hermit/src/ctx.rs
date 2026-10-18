@@ -227,7 +227,7 @@ impl Ctx {
         // Cosign before anything is stored, so a refused transition leaves no
         // trace. Local work is cosigned later, by whatever builds on it.
         if let (Some(w), Some(_)) = (&self.mem.witness, &self.remote) {
-            w.cosign(&m)?;
+            w.cosign(&m, self.store.list_manifests()?)?;
         }
         self.store.put_manifest(&m)?;
         if let Some(remote) = &self.remote {
