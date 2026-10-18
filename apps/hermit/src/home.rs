@@ -38,7 +38,8 @@ pub struct Pairing {
 
 impl Home {
     pub fn new(dir: &Path) -> Result<Home> {
-        fs::create_dir_all(dir)?;
+        fs::create_dir_all(dir)
+            .with_context(|| format!("creating device home {}", dir.display()))?;
         Ok(Home {
             dir: dir.to_owned(),
         })

@@ -7,8 +7,13 @@ use hermit_kernel::assess::{base_of, plan_merge, Verdict};
 
 pub fn merge(ctx: &Ctx) -> Result<()> {
     let a = ctx.assess()?;
-    let Verdict::ForkMergeable { a: ha, b: hb, base } = a.verdict else {
-        return Err(refuse_verdict(&a.verdict));
+    let (ha, hb, base) = match a.verdict {
+        Verdict::ForkMergeable { a, b, base } => (a, b, base),
+        Verdict::Ok { head } => {
+            println!("nothing to merge: single head {}", head.short());
+            return Ok(());
+        }
+        ref v => return Err(refuse_verdict(v)),
     };
     let plan = plan_merge(&a.valid, ha, hb, base);
     let devices = a.valid[&plan.devices_from].body.devices.clone();
@@ -21,13 +26,13 @@ pub fn merge(ctx: &Ctx) -> Result<()> {
 
 pub fn resolve(ctx: &Ctx, keep: &str) -> Result<()> {
     let a = ctx.assess()?;
-    let Verdict::Conflict {
-        a: ha,
-        b: hb,
-        ref reason,
-    } = a.verdict
-    else {
-        return Err(refuse_verdict(&a.verdict));
+    let (ha, hb, reason) = match &a.verdict {
+        Verdict::Conflict { a, b, reason } => (*a, *b, reason.clone()),
+        Verdict::Ok { head } => {
+            println!("nothing to resolve: single head {}", head.short());
+            return Ok(());
+        }
+        v => return Err(refuse_verdict(v)),
     };
     let (kept, other) = match (ha.hex().starts_with(keep), hb.hex().starts_with(keep)) {
         (true, false) => (ha, hb),
