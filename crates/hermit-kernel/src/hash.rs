@@ -50,8 +50,14 @@ impl fmt::Display for Hash {
 pub(crate) mod hex_bytes {
     use serde::{de::Error, Deserialize, Deserializer, Serializer};
 
+    /// Hex in human-readable formats (JSON: pairing payloads, device
+    /// homes, witness answers), raw bytes in CBOR.
     pub fn serialize<S: Serializer, const N: usize>(v: &[u8; N], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_bytes(v)
+        if s.is_human_readable() {
+            s.serialize_str(&hex::encode(v))
+        } else {
+            s.serialize_bytes(v)
+        }
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>, const N: usize>(
@@ -81,6 +87,11 @@ pub(crate) mod hex_bytes {
                     fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Bytes, E> {
                         Ok(Bytes(v))
                     }
+                    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Bytes, E> {
+                        hex::decode(v).map(Bytes).map_err(E::custom)
+                    }
+                    // Integer arrays: what JSON files written before hex
+                    // encoding contain.
                     fn visit_seq<A: SeqAccess<'de>>(self, mut a: A) -> Result<Bytes, A::Error> {
                         let mut out = Vec::new();
                         while let Some(b) = a.next_element()? {
@@ -89,9 +100,33 @@ pub(crate) mod hex_bytes {
                         Ok(Bytes(out))
                     }
                 }
-                d.deserialize_bytes(V)
+                if d.is_human_readable() {
+                    d.deserialize_any(V)
+                } else {
+                    d.deserialize_bytes(V)
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hashes_are_hex_in_json_and_bytes_in_cbor() {
+        let h = Hash([0xab; 32]);
+        let json = serde_json::to_string(&h).unwrap();
+        assert_eq!(json, format!("\"{}\"", "ab".repeat(32)));
+        assert_eq!(serde_json::from_str::<Hash>(&json).unwrap(), h);
+        // Device homes written before hex encoding still load.
+        let legacy = serde_json::to_string(&[0xabu8; 32]).unwrap();
+        assert_eq!(serde_json::from_str::<Hash>(&legacy).unwrap(), h);
+        // CBOR: a single 32-byte string (major type 2), not an array.
+        let c = cbor(&h);
+        assert_eq!((c[0], c.len()), (0x58, 34));
+        assert_eq!(from_cbor::<Hash>(&c).unwrap(), h);
     }
 }
 
