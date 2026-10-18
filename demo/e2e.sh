@@ -19,9 +19,17 @@ WORK=$(mktemp -d)
 cd "$WORK"
 "$RELAY_BIN" --listen "127.0.0.1:$PORT" --data relay-data --demo-admin >relay.log 2>&1 &
 RELAY_PID=$!
-trap 'kill $RELAY_PID 2>/dev/null; echo "workdir: $WORK"' EXIT
+WITNESS_BIN=${WITNESS_BIN:-$ROOT/target/debug/hermit-witness}
+WITNESS=http://127.0.0.1:$((PORT + 1))
+"$WITNESS_BIN" --listen "127.0.0.1:$((PORT + 1))" --data witness-data >witness.log 2>&1 &
+WITNESS_PID=$!
+trap 'kill $RELAY_PID $WITNESS_PID 2>/dev/null; echo "workdir: $WORK"' EXIT
 relay_mode() { curl -sf -X POST "$RELAY/admin/mode" -d "$1" >/dev/null && echo "(relay is now: $1)"; }
 sleep 1
+# A server that failed to bind exits at once; never run against a stale one.
+for pid in $RELAY_PID $WITNESS_PID; do
+  kill -0 "$pid" 2>/dev/null || { echo "FAIL: server exited at startup:"; cat relay.log witness.log; exit 1; }
+done
 
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 expect() { # expect <code> <cmd...>
@@ -32,7 +40,8 @@ expect() { # expect <code> <cmd...>
 wallet() { # a stalled lightwalletd connection must fail, not hang
   local out rc=0
   out=$(timeout 120 "$DEVTOOL" wallet "$@" 2>&1) || rc=$?
-  [[ $rc -ne 124 ]] || { echo "FAIL: devtool timed out: wallet $*"; exit 1; }
+  [[ $rc -ne 124 ]] || { echo "FAIL: devtool timed out: wallet $*" >&2; exit 1; }
+  [[ $rc -eq 0 ]] || { echo "FAIL: devtool exited $rc: wallet $*" >&2; echo "$out" >&2; exit 1; }
   grep -v ' INFO ' <<<"$out" || true
 }
 
@@ -47,7 +56,7 @@ echo "address: $addr_a"
 "$HERMIT" --home C device init --name tablet >tablet.json
 
 step "capsule + pairing"
-"$HERMIT" --home A create --wallet walletA --store "$RELAY" --include-secret
+"$HERMIT" --home A create --wallet walletA --store "$RELAY" --include-secret --witness "$WITNESS"
 "$HERMIT" --home A device add phone.json
 "$HERMIT" --home A pair >pair.json
 "$HERMIT" --home B join --store dir://storeB pair.json
@@ -70,6 +79,8 @@ step "rollback: the relay freezes and silently drops writes"
 relay_mode freeze
 "$HERMIT" --home A label contact:bob u1bob
 expect 20 "$HERMIT" --home A status --offline
+expect 20 "$HERMIT" --home B status --offline
+echo "✓ passive device B detects withheld state through the witness"
 relay_mode honest
 "$HERMIT" --home A status --offline
 echo "✓ withheld state republished from A's replica"
@@ -86,7 +97,7 @@ relay_mode honest
 step "partitioned label edits merge"
 "$HERMIT" --home B sync "$RELAY"
 "$HERMIT" --home A label "tx:first" "rent October"
-"$HERMIT" --home B label contact:alice u1alice
+"$HERMIT" --home B --local label contact:alice u1alice
 "$HERMIT" --home B sync "$RELAY"
 expect 21 "$HERMIT" --home B status --offline
 "$HERMIT" --home B merge
@@ -105,7 +116,7 @@ expect 23 "$HERMIT" --home A snapshot --wallet evil --server "$SERVER"
 
 step "partitioned authority edits conflict"
 "$HERMIT" --home A device add tablet.json
-"$HERMIT" --home B device revoke laptop
+"$HERMIT" --home B --local device revoke laptop
 "$HERMIT" --home B sync "$RELAY"
 expect 22 "$HERMIT" --home B merge
 
