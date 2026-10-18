@@ -35,6 +35,17 @@ pub fn sealed_bound(plain_len: u64) -> u64 {
     plain_len + (plain_len / 65536 + 1) * 16 + (1 << 20)
 }
 
+/// The form of a store spec worth persisting: directory stores become
+/// absolute, so the device works from any working directory.
+pub fn normalize_spec(spec: &str) -> Result<String> {
+    if spec.starts_with("http://") || spec.starts_with("https://") {
+        return Ok(spec.trim_end_matches('/').to_string());
+    }
+    let path = PathBuf::from(spec.strip_prefix("dir://").unwrap_or(spec));
+    fs::create_dir_all(&path)?;
+    Ok(format!("dir://{}", fs::canonicalize(&path)?.display()))
+}
+
 impl Store {
     pub fn open(spec: &str, capsule: Hash) -> Result<Store> {
         let backend = if spec.starts_with("http://") || spec.starts_with("https://") {

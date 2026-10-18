@@ -471,6 +471,7 @@ fn run(cli: Cli) -> Result<()> {
             include_secret,
             witness,
         } => {
+            let store = store::normalize_spec(&store)?;
             let keys = home.keys()?;
             let witness = witness
                 .as_deref()
@@ -554,6 +555,7 @@ fn run(cli: Cli) -> Result<()> {
             println!("{}", serde_json::to_string(&p)?);
         }
         Cmd::Join { store, pairing } => {
+            let store = store::normalize_spec(&store)?;
             let p: Pairing = serde_json::from_str(&fs::read_to_string(pairing)?)?;
             home.keys()?;
             home.save_membership(&Membership {
@@ -796,6 +798,7 @@ fn run(cli: Cli) -> Result<()> {
             })?;
         }
         Cmd::Sync { other } => {
+            let other = store::normalize_spec(&other)?;
             let ctx = Ctx::load(home, local)?;
             // Syncing with a third store: bring our provider's state along.
             // Syncing with our own provider: let the counts below show it.
