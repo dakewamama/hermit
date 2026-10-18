@@ -14,8 +14,8 @@ use rusqlite::{Connection, OpenFlags};
 use std::collections::BTreeMap;
 use std::path::Path;
 use zewif::{
-    Account, AccountViewingKey, AddressBookEntry, BlockHash, BlockHeight, Data, Network, ScanRange,
-    UnifiedFullViewingKey, Zewif, ZewifWallet,
+    Account, AccountViewingKey, AddressBookEntry, BlockHash, BlockHeight, Data, Network,
+    RegtestParams, ScanRange, UnifiedFullViewingKey, Zewif, ZewifWallet,
 };
 
 const VENDOR: &str = "hermit";
@@ -36,10 +36,19 @@ fn cbor_item<T: serde::Serialize>(v: &T) -> Data {
 }
 
 /// `db` is a path to a copy of the wallet's data.sqlite.
-pub fn export(db: &Path, anchor: &Anchor, labels: &Labels, lineage: &Lineage) -> Result<Vec<u8>> {
+/// `config` is the wallet's keys.toml (without the mnemonic); regtest
+/// wallets carry their activation schedule there.
+pub fn export(
+    db: &Path,
+    config: &str,
+    anchor: &Anchor,
+    labels: &Labels,
+    lineage: &Lineage,
+) -> Result<Vec<u8>> {
     let network = match anchor.network.as_str() {
         "main" => Network::Mainnet,
         "test" => Network::Testnet,
+        "regtest" => Network::Regtest(regtest_params(config)?),
         other => bail!("ZeWIF export for network '{other}' is not supported"),
     };
     let conn = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -114,6 +123,41 @@ pub fn export(db: &Path, anchor: &Anchor, labels: &Labels, lineage: &Lineage) ->
     Ok(doc.to_bytes()?)
 }
 
+/// A regtest network is defined by its activation schedule, keyed in ZeWIF
+/// by consensus branch ID. Upgrades set to "never" are simply absent.
+fn regtest_params(config: &str) -> Result<RegtestParams> {
+    use zcash_protocol::consensus::NetworkUpgrade as Nu;
+    const UPGRADES: [(&str, Nu); 11] = [
+        ("overwinter", Nu::Overwinter),
+        ("sapling", Nu::Sapling),
+        ("blossom", Nu::Blossom),
+        ("heartwood", Nu::Heartwood),
+        ("canopy", Nu::Canopy),
+        ("nu5", Nu::Nu5),
+        ("nu6", Nu::Nu6),
+        ("nu6_1", Nu::Nu6_1),
+        ("nu6_2", Nu::Nu6_2),
+        ("nu6_3", Nu::Nu6_3),
+        ("nu7", Nu::Nu7),
+    ];
+    let config: toml::Table = config.parse()?;
+    let heights = config
+        .get("activation_heights")
+        .and_then(|v| v.as_table())
+        .context("regtest wallet config has no [activation_heights]")?;
+    let mut activations = BTreeMap::new();
+    for (name, value) in heights {
+        let (_, nu) = UPGRADES
+            .iter()
+            .find(|(n, _)| n == name)
+            .with_context(|| format!("unknown network upgrade '{name}' in activation heights"))?;
+        if let Some(h) = value.as_integer() {
+            activations.insert(u32::from(nu.branch_id()), u32::try_from(h)?);
+        }
+    }
+    Ok(RegtestParams::new(activations))
+}
+
 /// Parse a ZeWIF document with the reference decoder and summarize it.
 pub fn describe(bytes: &[u8]) -> Result<String> {
     let doc = Zewif::from_bytes(bytes)?;
@@ -160,4 +204,31 @@ pub fn describe(bytes: &[u8]) -> Result<String> {
         .collect();
     out += &format!("\n  hermit extensions: {}", lineage.join(", "));
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regtest_schedule_is_keyed_by_branch_id() {
+        let config = r#"
+            network = "regtest"
+            birthday = 1
+            [activation_heights]
+            canopy = 1
+            nu5 = 2
+            nu7 = "never"
+        "#;
+        let params = regtest_params(config).unwrap();
+        let expected = BTreeMap::from([(0xe9ff_75a6, 1), (0xc2d6_d0b4, 2)]);
+        assert_eq!(params.activations(), &expected);
+    }
+
+    #[test]
+    fn unknown_upgrades_are_rejected_not_dropped() {
+        let config = "[activation_heights]\nnu99 = 5\n";
+        assert!(regtest_params(config).is_err());
+        assert!(regtest_params("network = \"regtest\"\n").is_err());
+    }
 }

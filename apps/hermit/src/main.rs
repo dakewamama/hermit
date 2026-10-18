@@ -856,7 +856,7 @@ fn run(cli: Cli) -> Result<()> {
                 head: head.id(),
                 seq: head.body.seq,
             };
-            let bytes = zewif_export::export(&db, anchor, &labels, &lineage)?;
+            let bytes = zewif_export::export(&db, &bundle.config, anchor, &labels, &lineage)?;
             fs::write(&out, &bytes)?;
             println!(
                 "✓ wrote {} ({} bytes) from S{} {}",
