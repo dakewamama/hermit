@@ -9,10 +9,13 @@ use zcash_client_backend::proto::service::{
     compact_tx_streamer_client::CompactTxStreamerClient, BlockId, ChainSpec,
 };
 
-pub fn default_server(network: &str) -> &'static str {
+/// A public server for the network, if there is one. Regtest chains are
+/// private, so their server must always be given explicitly.
+pub fn default_server(network: &str) -> Option<&'static str> {
     match network {
-        "main" => "https://zec.rocks:443",
-        _ => "https://testnet.zec.rocks:443",
+        "main" => Some("https://zec.rocks:443"),
+        "test" => Some("https://testnet.zec.rocks:443"),
+        _ => None,
     }
 }
 

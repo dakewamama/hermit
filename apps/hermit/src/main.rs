@@ -400,10 +400,14 @@ fn verify_anchor(anchor: Option<&Anchor>, net: &Net) -> Result<Option<(chain::Ch
         println!("  ! chain check skipped (--offline)");
         return Ok(None);
     }
-    let server = net
-        .server
-        .clone()
-        .unwrap_or_else(|| chain::default_server(&anchor.network).to_string());
+    let server = match (&net.server, chain::default_server(&anchor.network)) {
+        (Some(s), _) => s.clone(),
+        (None, Some(s)) => s.to_string(),
+        (None, None) => anyhow::bail!(
+            "no public server for network '{}'; pass --server (or --offline)",
+            anchor.network
+        ),
+    };
     let mut c =
         chain::Chain::connect(&server).with_context(|| format!("connecting to {server}"))?;
     match c.check_anchor(anchor)? {
