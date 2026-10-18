@@ -1,6 +1,7 @@
 //! Per-device local state: device keys, the pinned capsule, and the
 //! high-water mark used for rollback detection.
 
+use crate::witness::WitnessPin;
 use anyhow::{Context, Result};
 use hermit_kernel::assess::HighWater;
 use hermit_kernel::{DeviceKeys, Hash};
@@ -21,6 +22,8 @@ pub struct Membership {
     pub genesis: Hash,
     pub store: String,
     pub hwm: Option<HighWater>,
+    #[serde(default)]
+    pub witness: Option<WitnessPin>,
 }
 
 /// The out-of-band pairing payload.
@@ -29,6 +32,8 @@ pub struct Pairing {
     pub capsule_id: Hash,
     pub genesis: Hash,
     pub head: HighWater,
+    #[serde(default)]
+    pub witness: Option<WitnessPin>,
 }
 
 impl Home {

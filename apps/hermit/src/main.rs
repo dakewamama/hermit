@@ -1,6 +1,7 @@
 mod chain;
 mod home;
 mod store;
+mod witness;
 mod zcash;
 mod zewif_export;
 
@@ -50,6 +51,9 @@ enum Cmd {
         /// Also carry the (still age-encrypted) mnemonic as a Secret section.
         #[arg(long)]
         include_secret: bool,
+        /// Freshness witness to pin for this capsule.
+        #[arg(long)]
+        witness: Option<String>,
     },
     /// Print the pairing payload a new device needs to join (genesis + current head).
     Pair,
@@ -203,6 +207,20 @@ impl Ctx {
         for (id, why) in &a.rejected {
             println!("  ✗ rejected {}: {why}", id.short());
         }
+        if let (Some(w), Some(_)) = (&self.mem.witness, &self.remote) {
+            match w.latest(self.mem.capsule_id) {
+                Ok(Some(s)) if !a.valid.contains_key(&s.att.head) => die(
+                    EXIT_ROLLBACK,
+                    format!(
+                        "ROLLBACK DETECTED: witness attests S{} {} but the provider does not serve it",
+                        s.att.seq,
+                        s.att.head.short()
+                    ),
+                ),
+                Ok(_) => {}
+                Err(e) => println!("  ! {e}; freshness not verified"),
+            }
+        }
         if !withheld.is_empty() {
             let ids: Vec<&str> = withheld.iter().map(|s| &s[..8]).collect();
             die(
@@ -310,6 +328,11 @@ impl Ctx {
 
     fn commit(&self, body: Body) -> Result<Manifest> {
         let m = body.sign(&self.keys);
+        // Cosign before anything is stored, so a refused transition leaves no
+        // trace. Local work is cosigned later, by whatever builds on it.
+        if let (Some(w), Some(_)) = (&self.mem.witness, &self.remote) {
+            w.cosign(&m)?;
+        }
         self.store.put_manifest(&m)?;
         if let Some(remote) = &self.remote {
             remote.pull_from(&self.store)?;
@@ -446,8 +469,13 @@ fn run(cli: Cli) -> Result<()> {
             wallet,
             store,
             include_secret,
+            witness,
         } => {
             let keys = home.keys()?;
+            let witness = witness
+                .as_deref()
+                .map(witness::WitnessPin::fetch)
+                .transpose()?;
             let tmp = tempfile::tempdir()?;
             let cap = zcash::capture(&wallet, tmp.path())?;
             let devices = vec![keys.public()];
@@ -480,6 +508,10 @@ fn run(cli: Cli) -> Result<()> {
                 Some(cap.anchor.clone()),
             )?;
             let g = body.sign(&keys);
+            if let Some(w) = &witness {
+                w.cosign(&g)?;
+                println!("  ✓ witness {} pinned and cosigned genesis", &w.key[..16]);
+            }
             let real = Store::open(&store, g.body.capsule_id)?;
             for ct in sealed.take() {
                 real.put_blob(&ct)?;
@@ -492,6 +524,7 @@ fn run(cli: Cli) -> Result<()> {
                 genesis: g.id(),
                 store: store.clone(),
                 hwm: Some(HighWater { seq: 0, id: g.id() }),
+                witness,
             })?;
             println!(
                 "✓ capsule {} created (S0 {})",
@@ -516,6 +549,7 @@ fn run(cli: Cli) -> Result<()> {
                     seq: head.body.seq,
                     id: head.id(),
                 },
+                witness: ctx.mem.witness.clone(),
             };
             println!("{}", serde_json::to_string(&p)?);
         }
@@ -527,6 +561,7 @@ fn run(cli: Cli) -> Result<()> {
                 genesis: p.genesis,
                 store,
                 hwm: Some(p.head),
+                witness: p.witness,
             })?;
             println!(
                 "✓ joined capsule {} (pinned genesis {}, freshness floor S{} {})",
