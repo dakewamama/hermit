@@ -11,6 +11,7 @@ pub mod hash;
 pub mod manifest;
 pub mod metadata;
 pub mod seal;
+pub mod witness;
 
 pub use assess::{assess, Verdict};
 pub use device::{Device, DeviceKeys};
