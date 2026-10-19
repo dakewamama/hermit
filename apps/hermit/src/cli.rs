@@ -37,13 +37,19 @@ pub enum Cmd {
         #[arg(long)]
         witness: Option<String>,
     },
-    /// Print the pairing payload a new device needs to join (genesis + current head).
-    Pair,
-    /// Join a capsule using a pairing payload from an existing device.
-    Join {
+    /// Hand this capsule to a new device: prints a hermit: URI (or a QR)
+    /// and the verification code both devices must show.
+    Pair {
+        /// Draw the URI as a QR code in the terminal.
         #[arg(long)]
-        store: String,
-        pairing: PathBuf,
+        qr: bool,
+    },
+    /// Join a capsule from a pairing URI (or a file holding one).
+    Join {
+        pairing: String,
+        /// Provider to join through, if not the one in the pairing.
+        #[arg(long)]
+        store: Option<String>,
     },
     /// Record the wallet's current state as a new transition.
     Snapshot {

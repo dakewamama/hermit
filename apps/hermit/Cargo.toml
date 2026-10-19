@@ -15,6 +15,8 @@ toml = "0.8"
 rusqlite = { version = "0.37", features = ["bundled"] }
 ureq = "2"
 tempfile = "3"
+qrcode = { version = "0.14", default-features = false }
+base64 = "0.22"
 zewif = "=1.0.0-rc.3"
 bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
 ciborium.workspace = true

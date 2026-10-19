@@ -34,6 +34,9 @@ pub struct Pairing {
     pub head: HighWater,
     #[serde(default)]
     pub witness: Option<WitnessPin>,
+    /// The provider to join through, so the new device needs nothing else.
+    #[serde(default)]
+    pub store: Option<String>,
 }
 
 impl Home {

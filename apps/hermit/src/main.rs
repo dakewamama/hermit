@@ -3,6 +3,7 @@ mod cli;
 mod cmd;
 mod ctx;
 mod home;
+mod pairing;
 mod store;
 mod witness;
 mod zcash;

@@ -4,8 +4,8 @@
 use crate::ctx::{describe, print_scan, wallet_sections, Ctx};
 use crate::home::{Home, Membership, Pairing};
 use crate::store::{self, Store};
-use crate::{witness, zcash};
-use anyhow::Result;
+use crate::{pairing, witness, zcash};
+use anyhow::{Context, Result};
 use hermit_kernel::assess::HighWater;
 use hermit_kernel::metadata::Labels;
 use hermit_kernel::{seal, Body, Class, Device, DeviceKeys, Hash, SectionRef};
@@ -98,7 +98,7 @@ pub fn create(
     Ok(())
 }
 
-pub fn pair(ctx: &Ctx) -> Result<()> {
+pub fn pair(ctx: &Ctx, qr: bool) -> Result<()> {
     let (_, head) = ctx.head()?;
     let p = Pairing {
         capsule_id: ctx.mem.capsule_id,
@@ -108,21 +108,33 @@ pub fn pair(ctx: &Ctx) -> Result<()> {
             id: head.id(),
         },
         witness: ctx.mem.witness.clone(),
+        store: Some(ctx.mem.store.clone()),
     };
-    println!("{}", serde_json::to_string(&p)?);
+    let uri = pairing::to_uri(&p);
+    if qr {
+        print!("{}", pairing::qr(&uri)?);
+    }
+    println!("{uri}");
+    eprintln!(
+        "verification code: {}  (the new device must show the same code)",
+        pairing::code(&p)
+    );
     Ok(())
 }
 
-pub fn join(home: &Home, store: &str, pairing: &Path) -> Result<()> {
+pub fn join(home: &Home, pairing_arg: &str, store: Option<&str>) -> Result<()> {
+    let p = pairing::read(pairing_arg)?;
+    let store = store
+        .or(p.store.as_deref())
+        .context("the pairing names no provider; pass --store")?;
     let store = store::normalize_spec(store)?;
-    let p: Pairing = serde_json::from_str(&fs::read_to_string(pairing)?)?;
     home.keys()?;
     home.save_membership(&Membership {
         capsule_id: p.capsule_id,
         genesis: p.genesis,
         store,
         hwm: Some(p.head),
-        witness: p.witness,
+        witness: p.witness.clone(),
     })?;
     println!(
         "✓ joined capsule {} (pinned genesis {}, freshness floor S{} {})",
@@ -130,6 +142,10 @@ pub fn join(home: &Home, store: &str, pairing: &Path) -> Result<()> {
         p.genesis.short(),
         p.head.seq,
         p.head.id.short()
+    );
+    println!(
+        "  verification code: {}  (must match the code on the pairing device)",
+        pairing::code(&p)
     );
     Ok(())
 }

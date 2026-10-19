@@ -25,8 +25,8 @@ pub fn run(cli: Cli) -> Result<()> {
             include_secret,
             witness,
         } => capsule::create(&home, &wallet, &store, include_secret, witness.as_deref()),
-        Cmd::Pair => capsule::pair(&ctx(home)?),
-        Cmd::Join { store, pairing } => capsule::join(&home, &store, &pairing),
+        Cmd::Pair { qr } => capsule::pair(&ctx(home)?, qr),
+        Cmd::Join { pairing, store } => capsule::join(&home, &pairing, store.as_deref()),
         Cmd::Sync { other } => capsule::sync(&ctx(home)?, &other),
         Cmd::Snapshot {
             wallet,

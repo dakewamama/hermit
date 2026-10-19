@@ -1533,6 +1533,7 @@ name = "hermit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "bech32 0.11.1",
  "cddl-cat",
  "ciborium",
@@ -1540,6 +1541,7 @@ dependencies = [
  "hermit-kernel",
  "hex",
  "minicbor",
+ "qrcode",
  "rand 0.10.3",
  "rusqlite",
  "rustls",
@@ -2726,6 +2728,12 @@ checksum = "f94967dc7688f3054c7fac87473ffae4cc4c3904800e2d9f5b857246d8963b0a"
 dependencies = [
  "prost",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quote"
