@@ -14,6 +14,12 @@ mod zewif_import;
 use clap::Parser;
 
 fn main() {
+    // Behave like any Unix tool when the reader goes away (`hermit log |
+    // head`): end quietly instead of panicking on a broken pipe.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let cli = cli::Cli::parse();
     // The only exit point: everything (temporary directories holding
     // decrypted wallet data included) has been dropped by the time we leave.

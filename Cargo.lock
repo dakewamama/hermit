@@ -1540,6 +1540,7 @@ dependencies = [
  "clap",
  "hermit-kernel",
  "hex",
+ "libc",
  "minicbor",
  "qrcode",
  "rand 0.10.3",
