@@ -3,6 +3,8 @@ name = "hermit"
 version = "0.1.0"
 edition = "2021"
 description = "Hermit: portable, lineage-verified Zcash wallet state"
+license = "MIT"
+repository = "https://github.com/dakewamama/hermit"
 
 [dependencies]
 hermit-kernel = { path = "../../crates/hermit-kernel" }

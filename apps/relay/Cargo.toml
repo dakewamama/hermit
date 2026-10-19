@@ -3,6 +3,8 @@ name = "hermit-relay"
 version = "0.1.0"
 edition = "2021"
 description = "Untrusted blob relay for hermit capsules, with switchable hostile modes"
+license = "MIT"
+repository = "https://github.com/dakewamama/hermit"
 
 [dependencies]
 anyhow.workspace = true

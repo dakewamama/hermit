@@ -3,6 +3,8 @@ name = "hermit-witness"
 version = "0.1.0"
 edition = "2021"
 description = "Freshness witness for hermit capsules: signs the newest head it has seen, never an older one"
+license = "MIT"
+repository = "https://github.com/dakewamama/hermit"
 
 [dependencies]
 hermit-kernel = { path = "../../crates/hermit-kernel" }
