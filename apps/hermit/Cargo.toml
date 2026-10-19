@@ -16,6 +16,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 ureq = "2"
 tempfile = "3"
 zewif = { git = "https://github.com/zcash/zewif", rev = "e669634a816a19871a48af1f54bc31be8dc14fb7" }
+bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
 ciborium.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tonic = { version = "0.14", features = ["tls-webpki-roots", "tls-ring"] }

@@ -1405,6 +1405,7 @@ name = "hermit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bech32 0.11.1",
  "cddl-cat",
  "ciborium",
  "clap",
