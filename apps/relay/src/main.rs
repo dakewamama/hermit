@@ -1,6 +1,9 @@
-//! A deliberately dumb relay: it stores whatever it is given and lists
-//! whatever it has. Clients trust none of it. Started with an admin token it
-//! can be switched at runtime into hostile modes, for demonstrations:
+//! A deliberately dumb relay: it stores content-addressed blobs and
+//! manifests and lists what it has. Clients trust none of it. It does check
+//! one thing on upload, that content matches the name it is stored under, so
+//! nobody can overwrite or destroy what others put there. Started with an
+//! admin token it can be switched at runtime into hostile modes, for
+//! demonstrations:
 //!
 //!   honest   serve everything (default)
 //!   freeze   keep serving the manifest set as of the switch; accept and
@@ -10,7 +13,7 @@
 //!   curl -X POST localhost:8787/admin/mode -H "Authorization: Bearer $TOKEN" -d freeze
 
 use axum::{
-    body::Bytes,
+    body::Body,
     extract::DefaultBodyLimit,
     extract::{Path, State},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
@@ -18,11 +21,20 @@ use axum::{
     Router,
 };
 use clap::Parser;
+use futures_util::StreamExt;
+use hermit_kernel::hash::from_cbor;
+use hermit_kernel::{Hash, Manifest};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio::io::AsyncWriteExt;
 
-const MAX_BLOB: usize = 256 * 1024 * 1024;
+const MAX_BLOB: u64 = 256 * 1024 * 1024;
+/// Manifests are a few KB; the client refuses anything above 1 MiB too.
+const MAX_MANIFEST: u64 = 1 << 20;
+/// Distinguishes concurrent uploads' temporary files.
+static UPLOADS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Parser)]
 struct Args {
@@ -40,7 +52,7 @@ struct Args {
 #[derive(Clone, Debug, PartialEq)]
 enum Mode {
     Honest,
-    /// Manifest ids visible at the moment of freezing, per capsule dir.
+    /// Manifest ids (across all capsules) visible at the moment of freezing.
     Freeze(HashSet<String>),
     Corrupt,
 }
@@ -52,7 +64,8 @@ struct Relay {
     admin_token: Option<Arc<str>>,
 }
 
-/// Constant-time check of an `Authorization: Bearer <token>` header.
+/// Constant-time check of an `Authorization: Bearer <token>` header. Both
+/// sides are hashed first, so not even the token's length leaks.
 fn authorized(headers: &HeaderMap, token: &str) -> bool {
     let Some(given) = headers
         .get(AUTHORIZATION)
@@ -61,12 +74,12 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
     else {
         return false;
     };
-    given.len() == token.len()
-        && given
-            .bytes()
-            .zip(token.bytes())
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0
+    let a = Hash::of(b"ZcRelayAdmin_v1", given.as_bytes());
+    let b = Hash::of(b"ZcRelayAdmin_v1", token.as_bytes());
+    a.0.iter()
+        .zip(b.0.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
 }
 
 fn valid_name(s: &str) -> bool {
@@ -128,39 +141,108 @@ async fn list(
 async fn fetch(
     State(r): State<Relay>,
     Path((cap, kind, name)): Path<(String, String, String)>,
-) -> Result<Vec<u8>, StatusCode> {
+) -> Result<Body, StatusCode> {
     if let (Mode::Freeze(visible), "m") = (r.mode(), kind.as_str()) {
         if !visible.contains(&name) {
             return Err(StatusCode::NOT_FOUND);
         }
     }
-    let mut bytes = tokio::fs::read(r.path(&cap, &kind, Some(&name))?)
+    let p = r.path(&cap, &kind, Some(&name))?;
+    if r.mode() == Mode::Corrupt && kind == "b" {
+        // Demonstration mode only: load the blob to damage one byte of it.
+        let mut bytes = tokio::fs::read(&p)
+            .await
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+        if !bytes.is_empty() {
+            let mid = bytes.len() / 2;
+            bytes[mid] ^= 0x01;
+        }
+        return Ok(Body::from(bytes));
+    }
+    // Streamed from disk: serving a large blob does not hold it in memory.
+    let file = tokio::fs::File::open(&p)
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
-    if r.mode() == Mode::Corrupt && kind == "b" && !bytes.is_empty() {
-        let mid = bytes.len() / 2;
-        bytes[mid] ^= 0x01;
+    Ok(Body::from_stream(tokio_util::io::ReaderStream::new(file)))
+}
+
+/// Stream an upload into `tmp`, enforcing `max` as it arrives and hashing it
+/// on the way.
+async fn receive(body: Body, tmp: &std::path::Path, max: u64) -> Result<Hash, StatusCode> {
+    let mut file = tokio::fs::File::create(tmp)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut hasher = Hash::hasher(b"ZcBlob_v1");
+    let mut len = 0u64;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| StatusCode::BAD_REQUEST)?;
+        len += chunk.len() as u64;
+        if len > max {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        hasher.update(&chunk);
+        file.write_all(&chunk)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
-    Ok(bytes)
+    file.sync_all()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(hasher.finish())
 }
 
 async fn store(
     State(r): State<Relay>,
     Path((cap, kind, name)): Path<(String, String, String)>,
-    body: Bytes,
+    body: Body,
 ) -> Result<StatusCode, StatusCode> {
     let p = r.path(&cap, &kind, Some(&name))?;
     if matches!(r.mode(), Mode::Freeze(_)) {
         // Pretend to accept; a censoring provider looks healthy to the writer.
         return Ok(StatusCode::CREATED);
     }
-    tokio::fs::create_dir_all(p.parent().unwrap())
+    if tokio::fs::try_exists(&p).await.unwrap_or(false) {
+        // Content-addressed: what is stored there is already exactly this.
+        return Ok(StatusCode::OK);
+    }
+    let dir = p.parent().expect("path() always has a parent");
+    tokio::fs::create_dir_all(dir)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    tokio::fs::write(&p, &body)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(StatusCode::CREATED)
+    let tmp = dir.join(format!(
+        ".{name}.{}.{}.part",
+        std::process::id(),
+        UPLOADS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let max = if kind == "b" { MAX_BLOB } else { MAX_MANIFEST };
+    let result = async {
+        let hash = receive(body, &tmp, max).await?;
+        // Only content that matches its name is kept, so an upload can
+        // never replace or destroy anything stored before.
+        let addressed = if kind == "b" {
+            hash
+        } else {
+            let bytes = tokio::fs::read(&tmp)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            from_cbor::<Manifest>(&bytes)
+                .map_err(|_| StatusCode::UNPROCESSABLE_ENTITY)?
+                .id()
+        };
+        if addressed.hex() != name {
+            return Err(StatusCode::UNPROCESSABLE_ENTITY);
+        }
+        // Atomic: readers see the whole file or none of it.
+        tokio::fs::rename(&tmp, &p)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    }
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&tmp).await;
+    }
+    result.map(|_| StatusCode::CREATED)
 }
 
 async fn set_mode(
@@ -184,10 +266,21 @@ async fn set_mode(
     Ok(label)
 }
 
+/// The data directory is the relay's alone.
+fn restrict(dir: &std::path::Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     tokio::fs::create_dir_all(&args.data).await?;
+    restrict(&args.data)?;
     let relay = Relay {
         data: args.data,
         mode: Arc::new(Mutex::new(Mode::Honest)),
@@ -202,7 +295,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let app = app
         // A wallet section is a whole data.sqlite: tens of MB is normal.
-        .layer(DefaultBodyLimit::max(MAX_BLOB))
+        .layer(DefaultBodyLimit::max(MAX_BLOB as usize))
         .with_state(relay);
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     println!("hermit-relay listening on http://{}", args.listen);

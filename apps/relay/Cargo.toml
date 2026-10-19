@@ -8,6 +8,9 @@ repository = "https://github.com/dakewamama/hermit"
 
 [dependencies]
 anyhow.workspace = true
+hermit-kernel = { path = "../../crates/hermit-kernel" }
 axum = "0.8"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net"] }
+futures-util = { version = "0.3", default-features = false }
+tokio-util = { version = "0.7", features = ["io"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "io-util"] }
 clap = { version = "4", features = ["derive", "env"] }

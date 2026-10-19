@@ -17,6 +17,17 @@ impl Hash {
         Hash(h)
     }
 
+    /// The same hash as [`Hash::of`], fed incrementally (e.g. while
+    /// streaming an upload to disk).
+    pub fn hasher(domain: &[u8]) -> Hasher {
+        Hasher(
+            blake2b_simd::Params::new()
+                .hash_length(32)
+                .personal(domain)
+                .to_state(),
+        )
+    }
+
     pub fn hex(&self) -> String {
         hex::encode(self.0)
     }
@@ -31,6 +42,20 @@ impl Hash {
             .try_into()
             .map_err(|_| anyhow::anyhow!("hash must be 32 bytes"))?;
         Ok(Hash(arr))
+    }
+}
+
+pub struct Hasher(blake2b_simd::State);
+
+impl Hasher {
+    pub fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    pub fn finish(&self) -> Hash {
+        let mut h = [0u8; 32];
+        h.copy_from_slice(self.0.finalize().as_bytes());
+        Hash(h)
     }
 }
 
@@ -113,6 +138,16 @@ pub(crate) mod hex_bytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incremental_hash_matches_one_shot() {
+        let data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
+        let mut h = Hash::hasher(b"ZcBlob_v1");
+        for chunk in data.chunks(777) {
+            h.update(chunk);
+        }
+        assert_eq!(h.finish(), Hash::of(b"ZcBlob_v1", &data));
+    }
 
     #[test]
     fn hashes_are_hex_in_json_and_bytes_in_cbor() {
