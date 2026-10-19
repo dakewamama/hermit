@@ -14,6 +14,7 @@
 
 use axum::{
     body::Bytes,
+    extract::DefaultBodyLimit,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -28,8 +29,13 @@ use hermit_kernel::witness::{Attestation, CosignRequest, Signed};
 use hermit_kernel::Hash;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::path::{Path as FsPath, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+/// Cosign requests carry the capsule's history; this bounds how long a
+/// history one request may carry.
+const MAX_REQUEST: usize = 32 << 20;
 
 #[derive(Parser)]
 struct Args {
@@ -37,6 +43,9 @@ struct Args {
     listen: String,
     #[arg(long, default_value = "witness-data")]
     data: PathBuf,
+    /// Most capsules this witness will track; new ones are refused beyond it.
+    #[arg(long, default_value_t = 100_000)]
+    max_capsules: usize,
 }
 
 /// What the witness remembers per capsule: its genesis and the newest
@@ -51,7 +60,9 @@ struct Entry {
 struct Witness {
     key: Arc<SigningKey>,
     state: Arc<Mutex<BTreeMap<String, Entry>>>,
-    path: PathBuf,
+    /// One file per capsule: `<dir>/<capsule>.json`.
+    dir: PathBuf,
+    max_capsules: usize,
 }
 
 enum Decision {
@@ -92,12 +103,31 @@ fn decide(prev: Option<&Entry>, req: &CosignRequest) -> Decision {
 }
 
 impl Witness {
-    fn persist(&self, state: &BTreeMap<String, Entry>) -> anyhow::Result<()> {
-        let tmp = self.path.with_extension("tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(state)?)?;
-        std::fs::rename(tmp, &self.path)?;
-        Ok(())
+    /// Memory is only ever updated after its file is durably written, so a
+    /// failed write can never leave the witness forgetting what it signed.
+    /// Nothing under the lock can panic, so poisoning is recovered safely.
+    fn lock(&self) -> MutexGuard<'_, BTreeMap<String, Entry>> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn persist(&self, cap: &str, entry: &Entry) -> anyhow::Result<()> {
+        write_atomic(
+            &self.dir.join(format!("{cap}.json")),
+            &serde_json::to_vec(entry)?,
+        )
+    }
+}
+
+/// Write, fsync, rename, fsync the directory: after a crash the file holds
+/// either the old content or the new, never a truncated mix.
+fn write_atomic(path: &FsPath, bytes: &[u8]) -> anyhow::Result<()> {
+    let tmp = path.with_extension("tmp");
+    let mut f = std::fs::File::create(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path)?;
+    std::fs::File::open(path.parent().expect("file in a directory"))?.sync_all()?;
+    Ok(())
 }
 
 async fn public_key(State(w): State<Witness>) -> String {
@@ -105,9 +135,9 @@ async fn public_key(State(w): State<Witness>) -> String {
 }
 
 async fn latest(State(w): State<Witness>, Path(cap): Path<String>) -> Response {
-    let state = w.state.lock().unwrap();
-    match state.get(&cap) {
-        Some(e) => Json(Signed::sign(e.latest, &w.key)).into_response(),
+    let latest = w.lock().get(&cap).map(|e| e.latest);
+    match latest {
+        Some(att) => Json(Signed::sign(att, &w.key)).into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
@@ -116,26 +146,49 @@ async fn cosign(State(w): State<Witness>, body: Bytes) -> Response {
     let Ok(req) = from_cbor::<CosignRequest>(&body) else {
         return (StatusCode::BAD_REQUEST, "not a cosign request").into_response();
     };
+    let cap = req.tip.body.capsule_id.hex();
+    let prev = w.lock().get(&cap).cloned();
+    // Lineage verification is the expensive part: run it off the async
+    // workers and without holding the lock.
+    let (decision, req) = {
+        let prev = prev.clone();
+        match tokio::task::spawn_blocking(move || (decide(prev.as_ref(), &req), req)).await {
+            Ok(r) => r,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    };
     let m = &req.tip;
-    let cap = m.body.capsule_id.hex();
-    let mut state = w.state.lock().unwrap();
-    let prev = state.get(&cap).cloned();
-    match decide(prev.as_ref(), &req) {
+    match decision {
         Decision::Accept => {
             let entry = Entry {
-                genesis: prev.map(|e| e.genesis).unwrap_or_else(|| m.id()),
+                genesis: prev.as_ref().map(|e| e.genesis).unwrap_or_else(|| m.id()),
                 latest: Attestation::of(m),
             };
-            state.insert(cap, entry.clone());
-            if let Err(e) = w.persist(&state) {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            let mut state = w.lock();
+            let now = state.get(&cap).cloned();
+            // Someone may have advanced the capsule while we verified.
+            if now.as_ref().map(|e| e.latest) != prev.as_ref().map(|e| e.latest) {
+                let newer = now.expect("only ever added").latest;
+                return (StatusCode::CONFLICT, Json(Signed::sign(newer, &w.key))).into_response();
             }
-            println!(
-                "cosigned {} S{} {}",
-                m.body.capsule_id.short(),
-                entry.latest.seq,
-                entry.latest.head.short()
-            );
+            if now.is_none() && state.len() >= w.max_capsules {
+                return (StatusCode::INSUFFICIENT_STORAGE, "witness is at capacity")
+                    .into_response();
+            }
+            if now.as_ref().map(|e| e.latest) != Some(entry.latest) {
+                if let Err(e) = w.persist(&cap, &entry) {
+                    eprintln!("persisting {cap}: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                state.insert(cap, entry.clone());
+                println!(
+                    "cosigned {} S{} {}",
+                    m.body.capsule_id.short(),
+                    entry.latest.seq,
+                    entry.latest.head.short()
+                );
+            }
+            drop(state);
             Json(Signed::sign(entry.latest, &w.key)).into_response()
         }
         Decision::Stale(newer) => {
@@ -145,32 +198,91 @@ async fn cosign(State(w): State<Witness>, body: Bytes) -> Response {
     }
 }
 
-fn load_or_create_key(path: &std::path::Path) -> anyhow::Result<SigningKey> {
-    if let Ok(s) = std::fs::read_to_string(path) {
-        let b: [u8; 32] = hex::decode(s.trim())?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("witness key must be 32 bytes"))?;
-        return Ok(SigningKey::from_bytes(&b));
+/// The witness's identity. It is created once, readable only by its owner,
+/// and never silently replaced: clients have pinned it.
+fn load_or_create_key(path: &FsPath) -> anyhow::Result<SigningKey> {
+    match std::fs::read_to_string(path) {
+        Ok(s) => {
+            let b: [u8; 32] = hex::decode(s.trim())?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("witness key must be 32 bytes"))?;
+            Ok(SigningKey::from_bytes(&b))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let k = SigningKey::generate(&mut rand::rngs::OsRng);
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+            let mut f = opts.open(path)?;
+            f.write_all(hex::encode(k.to_bytes()).as_bytes())?;
+            f.sync_all()?;
+            Ok(k)
+        }
+        Err(e) => Err(anyhow::anyhow!(
+            "reading witness key {}: {e}",
+            path.display()
+        )),
     }
-    let k = SigningKey::generate(&mut rand::rngs::OsRng);
-    std::fs::write(path, hex::encode(k.to_bytes()))?;
-    Ok(k)
+}
+
+/// Load every capsule file; anything unreadable stops startup rather than
+/// being treated as "never seen", which could let the witness go backwards.
+fn load_state(dir: &FsPath) -> anyhow::Result<BTreeMap<String, Entry>> {
+    let mut state = BTreeMap::new();
+    for e in std::fs::read_dir(dir)? {
+        let path = e?.path();
+        if path.extension().and_then(|x| x.to_str()) != Some("json") {
+            continue;
+        }
+        let cap = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| anyhow::anyhow!("odd file name {}", path.display()))?
+            .to_string();
+        let entry: Entry = serde_json::from_slice(&std::fs::read(&path)?)
+            .map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        state.insert(cap, entry);
+    }
+    Ok(state)
+}
+
+/// One-time move from the single state.json of earlier versions.
+fn migrate(data: &FsPath, dir: &FsPath) -> anyhow::Result<()> {
+    let old = data.join("state.json");
+    if !old.exists() {
+        return Ok(());
+    }
+    let state: BTreeMap<String, Entry> = serde_json::from_slice(&std::fs::read(&old)?)?;
+    for (cap, entry) in &state {
+        write_atomic(
+            &dir.join(format!("{cap}.json")),
+            &serde_json::to_vec(entry)?,
+        )?;
+    }
+    std::fs::rename(&old, data.join("state.json.migrated"))?;
+    println!("migrated {} capsules from state.json", state.len());
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
-    std::fs::create_dir_all(&args.data)?;
+    let dir = args.data.join("capsules");
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&args.data, std::fs::Permissions::from_mode(0o700))?;
+    }
     let key = load_or_create_key(&args.data.join("witness.key"))?;
-    let path = args.data.join("state.json");
-    let state: BTreeMap<String, Entry> = match std::fs::read(&path) {
-        Ok(b) => serde_json::from_slice(&b)?,
-        Err(_) => BTreeMap::new(),
-    };
+    migrate(&args.data, &dir)?;
+    let state = load_state(&dir)?;
     let w = Witness {
         key: Arc::new(key),
         state: Arc::new(Mutex::new(state)),
-        path,
+        dir,
+        max_capsules: args.max_capsules,
     };
     println!(
         "hermit-witness {} listening on http://{}",
@@ -181,6 +293,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/key", get(public_key))
         .route("/latest/{cap}", get(latest))
         .route("/cosign", post(cosign))
+        .layer(DefaultBodyLimit::max(MAX_REQUEST))
         .with_state(w);
     let listener = tokio::net::TcpListener::bind(&args.listen).await?;
     axum::serve(listener, app).await?;
@@ -324,6 +437,70 @@ mod tests {
             ),
             "a seq jump would freeze every honest writer and alarm every reader"
         );
+    }
+
+    #[test]
+    fn key_is_private_created_once_and_never_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("witness.key");
+        let k1 = load_or_create_key(&path).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        let k2 = load_or_create_key(&path).unwrap();
+        assert_eq!(k1.to_bytes(), k2.to_bytes());
+        std::fs::write(&path, [0xffu8, 0xfe]).unwrap();
+        assert!(
+            load_or_create_key(&path).is_err(),
+            "a broken key file must stop startup"
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            [0xffu8, 0xfe],
+            "and stay untouched"
+        );
+    }
+
+    #[test]
+    fn state_round_trips_and_a_corrupt_file_stops_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = DeviceKeys::generate("laptop");
+        let g = genesis(&a);
+        let e = entry(&g, &g);
+        let cap = g.body.capsule_id.hex();
+        write_atomic(
+            &dir.path().join(format!("{cap}.json")),
+            &serde_json::to_vec(&e).unwrap(),
+        )
+        .unwrap();
+        let state = load_state(dir.path()).unwrap();
+        assert_eq!(state[&cap].latest, e.latest);
+        std::fs::write(dir.path().join("broken.json"), b"{").unwrap();
+        assert!(load_state(dir.path()).is_err());
+    }
+
+    #[test]
+    fn old_single_file_state_is_migrated_once() {
+        let data = tempfile::tempdir().unwrap();
+        let caps = data.path().join("capsules");
+        std::fs::create_dir_all(&caps).unwrap();
+        let a = DeviceKeys::generate("laptop");
+        let g = genesis(&a);
+        let cap = g.body.capsule_id.hex();
+        let old = BTreeMap::from([(cap.clone(), entry(&g, &g))]);
+        std::fs::write(
+            data.path().join("state.json"),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        migrate(data.path(), &caps).unwrap();
+        assert_eq!(load_state(&caps).unwrap()[&cap].genesis, g.id());
+        assert!(!data.path().join("state.json").exists());
+        assert!(data.path().join("state.json.migrated").exists());
+        migrate(data.path(), &caps).unwrap(); // second run is a no-op
     }
 
     #[test]

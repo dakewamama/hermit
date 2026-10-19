@@ -85,6 +85,9 @@ pub struct Manifest {
     pub evidence: Vec<Evidence>,
 }
 
+/// Most evidence entries a manifest may carry.
+pub const MAX_EVIDENCE: usize = 4;
+
 /// 2: notes are sealed bytes (v1 stored them as plaintext strings).
 /// 3: sections are sealed as padded frames and `len` is the padded size.
 pub const VERSION: u16 = 3;
@@ -212,6 +215,14 @@ impl Manifest {
             return Err("sections not strictly sorted".into());
         }
         check_devices(&b.devices)?;
+        // A real manifest carries one or two pieces of evidence; anything
+        // more is junk meant to make verifiers burn CPU.
+        if self.evidence.len() > MAX_EVIDENCE {
+            return Err(format!(
+                "too much evidence ({} entries)",
+                self.evidence.len()
+            ));
+        }
         let id = self.id();
         let signed = self
             .evidence

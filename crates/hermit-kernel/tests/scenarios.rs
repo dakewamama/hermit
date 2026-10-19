@@ -387,3 +387,15 @@ fn device_sets_must_be_unambiguous() {
         assert!(err.contains(why), "{err}");
     }
 }
+
+#[test]
+fn junk_evidence_is_rejected_before_verification() {
+    let w = world();
+    let mut m = step(&w.g, &w.a, "db@110", "{}", 110);
+    let real = m.evidence[0].clone();
+    m.evidence = std::iter::repeat_n(Evidence::Signature { sig: [0; 64] }, 10_000)
+        .chain([real])
+        .collect();
+    let err = m.check_self().unwrap_err();
+    assert!(err.contains("too much evidence"), "{err}");
+}
