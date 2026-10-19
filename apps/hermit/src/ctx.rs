@@ -325,6 +325,12 @@ pub fn verify_anchor(anchor: Option<&Anchor>, net: &Net) -> Result<Option<(chain
         println!("  ! chain check skipped (--offline)");
         return Ok(None);
     }
+    // The chain check is gRPC and does not go through the proxy yet. Never
+    // leak around a proxy the user asked for.
+    anyhow::ensure!(
+        !crate::net::proxied(),
+        "chain checks cannot go through --proxy yet; pass --offline, or check against a server you run"
+    );
     let server = match (&net.server, chain::default_server(&anchor.network)) {
         (Some(s), _) => s.clone(),
         (None, Some(s)) => s.to_string(),

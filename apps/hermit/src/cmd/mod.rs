@@ -11,6 +11,7 @@ use crate::home::Home;
 use anyhow::Result;
 
 pub fn run(cli: Cli) -> Result<()> {
+    crate::net::init(cli.proxy.as_deref())?;
     let home = Home::new(&cli.home)?;
     // Commands that work on an existing capsule get a context.
     let ctx = |home| Ctx::load(home, cli.local);

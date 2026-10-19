@@ -16,6 +16,10 @@ pub struct Cli {
     /// new transitions are published on the next sync.
     #[arg(long, global = true)]
     pub local: bool,
+    /// Send all relay and witness traffic through this SOCKS5 proxy, e.g.
+    /// socks5://127.0.0.1:9050 for Tor. Fails closed: no direct fallback.
+    #[arg(long, global = true, env = "HERMIT_PROXY")]
+    pub proxy: Option<String>,
     #[command(subcommand)]
     pub cmd: Cmd,
 }

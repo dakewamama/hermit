@@ -70,7 +70,8 @@ impl Store {
                 .map(|e| Ok(e?.file_name().to_string_lossy().into_owned()))
                 .collect(),
             Backend::Http(base) => {
-                let body = ureq::get(&format!("{base}/{kind}"))
+                let body = crate::net::agent()
+                    .get(&format!("{base}/{kind}"))
                     .call()
                     .with_context(|| format!("listing {base}/{kind}"))?
                     .into_string()?;
@@ -92,7 +93,10 @@ impl Store {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
                 Err(e) => return Err(e.into()),
             },
-            Backend::Http(base) => match ureq::get(&format!("{base}/{kind}/{name}")).call() {
+            Backend::Http(base) => match crate::net::agent()
+                .get(&format!("{base}/{kind}/{name}"))
+                .call()
+            {
                 Ok(resp) => resp.into_reader(),
                 Err(ureq::Error::Status(404, _)) => return Ok(None),
                 Err(e) => return Err(e.into()),
@@ -119,7 +123,7 @@ impl Store {
             }
             Backend::Http(base) => {
                 let url = format!("{base}/{kind}/{name}");
-                if let Err(e) = ureq::put(&url).send_bytes(bytes) {
+                if let Err(e) = crate::net::agent().put(&url).send_bytes(bytes) {
                     bail!("uploading {url}: {e}");
                 }
             }

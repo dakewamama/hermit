@@ -20,7 +20,8 @@ impl WitnessPin {
     /// from the pairing payload, never from the witness itself.
     pub fn fetch(url: &str) -> Result<WitnessPin> {
         let url = url.trim_end_matches('/').to_string();
-        let key = ureq::get(&format!("{url}/key"))
+        let key = crate::net::agent()
+            .get(&format!("{url}/key"))
             .call()
             .with_context(|| format!("contacting witness {url}"))?
             .into_string()?;
@@ -61,7 +62,10 @@ impl WitnessPin {
             tip: m.clone(),
             ancestry,
         };
-        match ureq::post(&format!("{}/cosign", self.url)).send_bytes(&cbor(&req)) {
+        match crate::net::agent()
+            .post(&format!("{}/cosign", self.url))
+            .send_bytes(&cbor(&req))
+        {
             Ok(resp) => {
                 let s = self.checked(&resp.into_string()?, cap)?;
                 anyhow::ensure!(
@@ -90,7 +94,10 @@ impl WitnessPin {
 
     /// The newest head the witness has attested for `capsule`, if any.
     pub fn latest(&self, capsule: Hash) -> Result<Option<Signed>> {
-        match ureq::get(&format!("{}/latest/{}", self.url, capsule.hex())).call() {
+        match crate::net::agent()
+            .get(&format!("{}/latest/{}", self.url, capsule.hex()))
+            .call()
+        {
             Ok(resp) => Ok(Some(self.checked(&resp.into_string()?, capsule)?)),
             Err(ureq::Error::Status(404, _)) => Ok(None),
             Err(e) => Err(anyhow!("witness unreachable: {e}")),
