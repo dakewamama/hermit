@@ -152,7 +152,7 @@ impl Ctx {
             class,
             plain: Hash::of(b"ZcPlain_v1", plain),
             blob,
-            len: plain.len() as u64,
+            len: seal::framed_len(plain.len()),
         })
     }
 

@@ -34,6 +34,9 @@ pub struct SectionRef {
     pub plain: Hash,
     /// Content address of the ciphertext blob in storage.
     pub blob: Hash,
+    /// Size of the padded frame the plaintext was sealed as
+    /// (`seal::framed_len`), never the exact plaintext length: manifests are
+    /// visible to storage.
     pub len: u64,
 }
 
@@ -83,7 +86,8 @@ pub struct Manifest {
 }
 
 /// 2: notes are sealed bytes (v1 stored them as plaintext strings).
-pub const VERSION: u16 = 2;
+/// 3: sections are sealed as padded frames and `len` is the padded size.
+pub const VERSION: u16 = 3;
 
 pub fn state_root(sections: &[SectionRef]) -> Hash {
     let leaves: Vec<(&str, Class, Hash)> = sections

@@ -49,7 +49,7 @@ pub fn create(
             class,
             plain: Hash::of(b"ZcPlain_v1", pt),
             blob,
-            len: pt.len() as u64,
+            len: seal::framed_len(pt.len()),
         })
     };
     let mut sections = wallet_sections(&put, &cap, include_secret)?;
