@@ -94,6 +94,13 @@ pub enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Turn a ZeWIF document into a fresh, view-only wallet another program
+    /// can open (zcash_client_sqlite's own importer does the import).
+    Adopt {
+        zewif: PathBuf,
+        #[arg(long)]
+        into: PathBuf,
+    },
 }
 
 #[derive(clap::Args)]

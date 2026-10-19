@@ -179,7 +179,7 @@ pub fn restore(bundle: &WalletBundle, mnemonic: Option<&str>, into: &Path) -> Re
 
 /// The compact-block cache is never carried (it is re-derivable), but the
 /// wallet expects an initialized, empty `FsBlockDb` next to its data DB.
-fn init_block_cache(into: &Path) -> Result<()> {
+pub fn init_block_cache(into: &Path) -> Result<()> {
     fs::create_dir_all(into.join("blocks"))?;
     let conn = Connection::open(into.join("blockmeta.sqlite"))?;
     conn.execute_batch(

@@ -7,6 +7,7 @@ mod store;
 mod witness;
 mod zcash;
 mod zewif_export;
+mod zewif_import;
 
 use clap::Parser;
 

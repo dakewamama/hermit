@@ -1,7 +1,7 @@
 //! Handing the verified state to other wallets.
 
 use crate::ctx::Ctx;
-use crate::{zcash, zewif_export};
+use crate::{zcash, zewif_export, zewif_import};
 use anyhow::{Context, Result};
 use hermit_kernel::metadata::Labels;
 use std::fs;
@@ -42,5 +42,27 @@ pub fn zewif(ctx: &Ctx, out: &Path) -> Result<()> {
     );
     // Read it back with the reference decoder before calling it done.
     println!("{}", zewif_export::describe(&fs::read(out)?)?);
+    Ok(())
+}
+
+pub fn adopt(document: &Path, into: &Path) -> Result<()> {
+    let a = zewif_import::adopt(&fs::read(document)?, into)?;
+    println!(
+        "✓ adopted {} into {} ({} network, birthday {})",
+        document.display(),
+        into.display(),
+        a.network,
+        a.birthday
+    );
+    for acct in &a.report.imported_accounts {
+        println!(
+            "  account '{}' imported ({:?})",
+            acct.name, acct.birthday_basis
+        );
+    }
+    for skipped in &a.report.skipped_accounts {
+        println!("  ✗ account skipped: {skipped:?}");
+    }
+    println!("  view-only: secret material, if any, was discarded");
     Ok(())
 }

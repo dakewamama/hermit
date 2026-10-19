@@ -12,17 +12,19 @@ hex.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
 toml = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 ureq = "2"
 tempfile = "3"
-zewif = { git = "https://github.com/zcash/zewif", rev = "e669634a816a19871a48af1f54bc31be8dc14fb7" }
+zewif = "=1.0.0-rc.3"
 bech32 = { version = "0.11", default-features = false, features = ["alloc"] }
 ciborium.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tonic = { version = "0.14", features = ["tls-webpki-roots", "tls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818", default-features = false, features = ["lightwalletd-tonic-tls-webpki-roots"] }
-zcash_protocol = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818" }
+zcash_protocol = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818", features = ["local-consensus"] }
+zcash_client_sqlite = { git = "https://github.com/zcash/librustzcash.git", rev = "eb38d7a373661179dbc083a2fd58b3a6c9b25818", features = ["zewif"] }
+rand_wallet = { package = "rand", version = "0.10", default-features = false, features = ["sys_rng"] }
 
 [dev-dependencies]
 cddl-cat = "0.7.1"

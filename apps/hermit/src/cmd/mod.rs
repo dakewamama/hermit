@@ -46,5 +46,6 @@ pub fn run(cli: Cli) -> Result<()> {
         Cmd::Merge => reconcile::merge(&ctx(home)?),
         Cmd::Resolve { keep } => reconcile::resolve(&ctx(home)?, &keep),
         Cmd::Zewif { out } => export::zewif(&ctx(home)?, &out),
+        Cmd::Adopt { zewif, into } => export::adopt(&zewif, &into),
     }
 }
