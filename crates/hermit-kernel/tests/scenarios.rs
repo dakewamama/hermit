@@ -399,3 +399,167 @@ fn junk_evidence_is_rejected_before_verification() {
     let err = m.check_self().unwrap_err();
     assert!(err.contains("too much evidence"), "{err}");
 }
+
+fn child_with(
+    parent: &Manifest,
+    who: &DeviceKeys,
+    devices: Vec<hermit_kernel::Device>,
+    sections: Vec<SectionRef>,
+    note: &str,
+) -> Manifest {
+    Body::child(
+        &[parent],
+        who,
+        devices,
+        sections,
+        parent.body.anchor.clone(),
+        note,
+    )
+    .unwrap()
+    .sign(who)
+}
+
+#[test]
+fn concurrent_secret_edits_conflict_whichever_branch_sorts_first() {
+    // Run many times: ids are random, so the branch order varies.
+    for _ in 0..24 {
+        let w = world();
+        let base = child_with(
+            &w.g,
+            &w.a,
+            w.g.body.devices.clone(),
+            vec![
+                sec("labels", Class::Metadata, "{}"),
+                sec("spend", Class::Secret, "k0"),
+            ],
+            "add spend key",
+        );
+        // One branch rewrites the secret *and* reclassifies it as metadata.
+        let xa = child_with(
+            &base,
+            &w.a,
+            base.body.devices.clone(),
+            vec![
+                sec("labels", Class::Metadata, "{}"),
+                sec("spend", Class::Metadata, "k1"),
+            ],
+            "a",
+        );
+        let xb = child_with(
+            &base,
+            &w.b,
+            base.body.devices.clone(),
+            vec![
+                sec("labels", Class::Metadata, "{}"),
+                sec("spend", Class::Secret, "k2"),
+            ],
+            "b",
+        );
+        let r = assess(vec![w.g.clone(), base, xa, xb], w.g.id(), None);
+        assert!(
+            matches!(r.verdict, Verdict::Conflict { .. }),
+            "{:?}",
+            r.verdict
+        );
+    }
+}
+
+#[test]
+fn a_revoked_device_cannot_slip_writes_in_through_a_concurrent_branch() {
+    let w = world();
+    let s1 = step(&w.g, &w.a, "db@110", "{}", 110);
+    // Laptop revokes the phone...
+    let revoke = child_with(
+        &s1,
+        &w.a,
+        vec![w.a.public()],
+        s1.body.sections.clone(),
+        "revoke phone",
+    );
+    // ...while the phone, concurrently, keeps writing.
+    let sneak = step(&s1, &w.b, "db@110", "{evil}", 110);
+    let r = assess(vec![w.g.clone(), s1, revoke, sneak], w.g.id(), None);
+    assert!(
+        matches!(r.verdict, Verdict::Conflict { ref reason, .. } if reason.contains("AUTHORITY")),
+        "{:?}",
+        r.verdict
+    );
+}
+
+#[test]
+fn a_device_added_on_one_branch_may_write_there() {
+    let w = world();
+    let s1 = step(&w.g, &w.a, "db@110", "{}", 110);
+    let tablet = DeviceKeys::generate("tablet");
+    let mut devices = s1.body.devices.clone();
+    devices.push(tablet.public());
+    let add = child_with(&s1, &w.a, devices, s1.body.sections.clone(), "add tablet");
+    let by_tablet = step(&add, &tablet, "db@111", "{tablet}", 111);
+    let by_phone = step(&s1, &w.b, "db@112", "{phone}", 112);
+    let r = assess(
+        vec![w.g.clone(), s1, add, by_tablet, by_phone],
+        w.g.id(),
+        None,
+    );
+    assert!(
+        matches!(r.verdict, Verdict::ForkMergeable { .. }),
+        "{:?}",
+        r.verdict
+    );
+}
+
+#[test]
+fn with_three_heads_this_devices_branch_is_never_left_out() {
+    let w = world();
+    let mine = step(&w.g, &w.a, "db@101", "{mine}", 101);
+    let x1 = step(&w.g, &w.b, "db@102", "{x1}", 102);
+    let x2 = step(&x1, &w.b, "db@103", "{x2}", 103);
+    let y1 = step(&w.g, &w.b, "db@104", "{y1}", 104);
+    let y2 = step(&y1, &w.b, "db@105", "{y2}", 105);
+    let r = assess(
+        vec![w.g.clone(), mine.clone(), x1, x2, y1, y2],
+        w.g.id(),
+        Some(hw(&mine)),
+    );
+    match r.verdict {
+        Verdict::ForkMergeable { a, b, .. } => {
+            assert!(a == mine.id() || b == mine.id(), "own branch left out")
+        }
+        Verdict::Conflict { .. } => {}
+        v => panic!("{v:?}"),
+    }
+}
+
+#[test]
+fn reordering_the_same_devices_is_not_an_authority_change() {
+    let w = world();
+    let s1 = step(&w.g, &w.a, "db@110", "{}", 110);
+    let mut reversed = s1.body.devices.clone();
+    reversed.reverse();
+    let xa = child_with(&s1, &w.a, reversed, s1.body.sections.clone(), "reorder");
+    let xb = step(&s1, &w.b, "db@111", "{bob}", 111);
+    let r = assess(vec![w.g.clone(), s1, xa, xb], w.g.id(), None);
+    assert!(
+        matches!(r.verdict, Verdict::ForkMergeable { .. }),
+        "{:?}",
+        r.verdict
+    );
+}
+
+#[test]
+fn device_sets_must_name_real_age_recipients() {
+    let w = world();
+    // Built by hand: Body::child would refuse to seal to it in the first place.
+    let mut body = Body::child(
+        &[&w.g],
+        &w.a,
+        w.g.body.devices.clone(),
+        w.g.body.sections.clone(),
+        None,
+        "x",
+    )
+    .unwrap();
+    body.devices[1].recipient = "not-an-age-recipient".into();
+    let err = body.sign(&w.a).check_self().unwrap_err();
+    assert!(err.contains("recipient"), "{err}");
+}

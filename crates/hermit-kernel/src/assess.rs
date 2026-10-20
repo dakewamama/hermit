@@ -2,6 +2,7 @@
 //! us, the pinned genesis, and this device's high-water mark, decide what
 //! the state actually is — or refuse.
 
+use crate::device::Device;
 use crate::hash::Hash;
 use crate::manifest::{Class, Manifest, SectionRef};
 use std::collections::{BTreeMap, BTreeSet};
@@ -103,13 +104,27 @@ fn check_lineage(
         if parent.body.capsule_id != b.capsule_id {
             return Err("parent belongs to another capsule".into());
         }
+        if parent.body.domain != b.domain {
+            return Err("parent belongs to another domain".into());
+        }
+        if let (Some(pa), Some(ba)) = (&parent.body.anchor, &b.anchor) {
+            if pa.network != ba.network {
+                return Err(format!(
+                    "anchor moved from {} to {}",
+                    pa.network, ba.network
+                ));
+            }
+        }
         if !parent.body.devices.iter().any(|d| d.sign_pk == b.author) {
             return Err("UNKNOWN_DEVICE: author not authorized by parent".into());
         }
         max_seq = max_seq.max(parent.body.seq);
     }
-    if b.seq != max_seq + 1 {
-        return Err(format!("bad seq {} (expected {})", b.seq, max_seq + 1));
+    let Some(want) = max_seq.checked_add(1) else {
+        return Err("seq overflow".into());
+    };
+    if b.seq != want {
+        return Err(format!("bad seq {} (expected {want})", b.seq));
     }
     Ok(())
 }
@@ -161,11 +176,29 @@ fn decide(valid: &BTreeMap<Hash, Manifest>, hwm: Option<HighWater>) -> Verdict {
         }
     }
 
-    match tips.as_slice() {
-        [one] => Verdict::Ok { head: one.id() },
-        [a, b, ..] => classify_fork(valid, a, b),
-        [] => unreachable!(),
+    if let [one] = tips.as_slice() {
+        return Verdict::Ok { head: one.id() };
     }
+    // This device's own branch always takes part: it is the one whose state
+    // the user last accepted. Against each other head it must merge cleanly;
+    // the first conflict found is the verdict.
+    let own = hwm
+        .and_then(|k| {
+            tips.iter()
+                .position(|t| ancestors(valid, t.id()).contains(&k.id))
+        })
+        .unwrap_or(0);
+    let mine = tips.remove(own);
+    let mut first = None;
+    for other in &tips {
+        match classify_fork(valid, mine, other) {
+            v @ Verdict::Conflict { .. } => return v,
+            v => {
+                first.get_or_insert(v);
+            }
+        }
+    }
+    first.expect("two or more tips")
 }
 
 /// Latest common ancestor (highest seq) of two heads.
@@ -178,8 +211,10 @@ pub fn base_of(valid: &BTreeMap<Hash, Manifest>, a: Hash, b: Hash) -> Option<Has
         .map(|m| m.id())
 }
 
-/// Names of sections whose plaintext differs from `base`.
-pub fn changed(base: &Manifest, tip: &Manifest) -> BTreeMap<String, Class> {
+/// Names of sections whose plaintext or class differs from `base`, with
+/// every class the section had on either side: reclassifying a section is a
+/// change, and must not hide that it was a secret.
+pub fn changed(base: &Manifest, tip: &Manifest) -> BTreeMap<String, BTreeSet<Class>> {
     let mut out = BTreeMap::new();
     let names: BTreeSet<&String> = base
         .body
@@ -191,9 +226,9 @@ pub fn changed(base: &Manifest, tip: &Manifest) -> BTreeMap<String, Class> {
     for n in names {
         let x = base.body.section(n);
         let y = tip.body.section(n);
-        if x.map(|s| s.plain) != y.map(|s| s.plain) {
-            let class = y.or(x).expect("present in one").class;
-            out.insert(n.clone(), class);
+        if x.map(|s| (s.plain, s.class)) != y.map(|s| (s.plain, s.class)) {
+            let classes = x.iter().chain(y.iter()).map(|s| s.class).collect();
+            out.insert(n.clone(), classes);
         }
     }
     out
@@ -210,25 +245,46 @@ fn classify_fork(valid: &BTreeMap<Hash, Manifest>, a: &Manifest, b: &Manifest) -
     };
     let base = &valid[&base_id];
 
-    let dev_a = a.body.devices != base.body.devices;
-    let dev_b = b.body.devices != base.body.devices;
-    if dev_a && dev_b && a.body.devices != b.body.devices {
-        return Verdict::Conflict {
-            a: ai,
-            b: bi,
-            reason: "AUTHORITY: device set changed concurrently on both branches".into(),
-        };
+    let conflict = |reason: String| Verdict::Conflict {
+        a: ai,
+        b: bi,
+        reason,
+    };
+
+    let (sa, sb, sbase) = (
+        device_set(&a.body.devices),
+        device_set(&b.body.devices),
+        device_set(&base.body.devices),
+    );
+    if sa != sbase && sb != sbase && sa != sb {
+        return conflict("AUTHORITY: device set changed concurrently on both branches".into());
+    }
+    // A device removed on one branch must not get its concurrent writes on
+    // the other branch merged in after the fact. (A device added on the
+    // other branch was never removed, and may write there.)
+    let at_base = |k: &[u8; 32]| base.body.devices.iter().any(|d| d.sign_pk == *k);
+    for (tip, other) in [(a, b), (b, a)] {
+        let theirs = ancestors(valid, other.id());
+        let ours = ancestors(valid, tip.id());
+        for h in theirs.difference(&ours) {
+            let m = &valid[h];
+            let kept = tip.body.devices.iter().any(|d| d.sign_pk == m.body.author);
+            if at_base(&m.body.author) && !kept {
+                return conflict(format!(
+                    "AUTHORITY: {} wrote {} concurrently with its removal",
+                    m.author_name(),
+                    h.short()
+                ));
+            }
+        }
     }
 
     let ca = changed(base, a);
     let cb = changed(base, b);
-    for (name, class) in &ca {
-        if *class == Class::Secret && cb.contains_key(name) {
-            return Verdict::Conflict {
-                a: ai,
-                b: bi,
-                reason: format!("SECRET: section '{name}' changed concurrently"),
-            };
+    for (name, classes) in &ca {
+        let Some(other) = cb.get(name) else { continue };
+        if classes.contains(&Class::Secret) || other.contains(&Class::Secret) {
+            return conflict(format!("SECRET: section '{name}' changed concurrently"));
         }
     }
     Verdict::ForkMergeable {
@@ -236,6 +292,14 @@ fn classify_fork(valid: &BTreeMap<Hash, Manifest>, a: &Manifest, b: &Manifest) -
         b: bi,
         base: base_id,
     }
+}
+
+/// A device set as a set: order carries no authority.
+fn device_set(devices: &[Device]) -> BTreeSet<(&str, [u8; 32], &str)> {
+    devices
+        .iter()
+        .map(|d| (d.name.as_str(), d.sign_pk, d.recipient.as_str()))
+        .collect()
 }
 
 /// How each section of a merge resolves. Metadata sections that changed on
@@ -248,7 +312,8 @@ pub enum Resolution {
 
 pub struct MergePlan {
     pub sections: Vec<(String, Resolution)>,
-    /// Which branch supplies the anchor (the higher chain-verified one).
+    /// Which branch supplies the anchor: the higher one. Nothing here has
+    /// checked it against the chain; restore does.
     pub anchor_from: Hash,
     pub devices_from: Hash,
 }
@@ -279,7 +344,7 @@ pub fn plan_merge(valid: &BTreeMap<Hash, Manifest>, a: Hash, b: Hash, base: Hash
             (false, true) => sb.map(Resolution::Take),
             (false, false) => sa.or(sb).map(Resolution::Take),
             (true, true) => match (sa, sb) {
-                (Some(x), Some(y)) if x.class == Class::Metadata => {
+                (Some(x), Some(y)) if x.class == Class::Metadata && y.class == Class::Metadata => {
                     Some(Resolution::MergeMetadata { a: x, b: y })
                 }
                 // Derived / Progress: the branch with the higher anchor wins;
@@ -297,7 +362,7 @@ pub fn plan_merge(valid: &BTreeMap<Hash, Manifest>, a: Hash, b: Hash, base: Hash
         }
     }
 
-    let devices_from = if mb.body.devices != mbase.body.devices {
+    let devices_from = if device_set(&mb.body.devices) != device_set(&mbase.body.devices) {
         b
     } else {
         a

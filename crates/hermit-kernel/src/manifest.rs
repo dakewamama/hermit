@@ -118,6 +118,9 @@ fn check_devices(devices: &[Device]) -> Result<(), String> {
         if !keys.insert(d.sign_pk) {
             return Err(format!("device key of '{}' used twice", d.name));
         }
+        if d.recipient.parse::<age::x25519::Recipient>().is_err() {
+            return Err(format!("device '{}' has no valid age recipient", d.name));
+        }
     }
     Ok(())
 }
