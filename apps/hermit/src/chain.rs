@@ -2,7 +2,7 @@
 //! Zaino). The capsule is never trusted about the chain: its anchor must be a
 //! real block, and the rescan delta is measured against the live tip.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use hermit_kernel::{Anchor, Hash};
 use tonic::transport::{Channel, ClientTlsConfig};
 use zcash_client_backend::proto::service::{
@@ -32,11 +32,11 @@ impl Chain {
         let client = rt.block_on(async {
             let mut ch = Channel::from_shared(server.to_string())?;
             if server.starts_with("https://") {
-                let host = server
-                    .trim_start_matches("https://")
-                    .split(':')
-                    .next()
-                    .unwrap_or_default()
+                let uri: tonic::codegen::http::Uri = server.parse()?;
+                let host = uri
+                    .host()
+                    .context("server URL has no host")?
+                    .trim_matches(|c| c == '[' || c == ']')
                     .to_string();
                 ch = ch.tls_config(
                     ClientTlsConfig::new()
@@ -55,7 +55,7 @@ impl Chain {
             .rt
             .block_on(self.client.get_latest_block(ChainSpec {}))?
             .into_inner();
-        Ok(r.height as u32)
+        u32::try_from(r.height).context("server reports an impossible chain height")
     }
 
     pub fn block_hash(&mut self, height: u32) -> Result<Hash> {

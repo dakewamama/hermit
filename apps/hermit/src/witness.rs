@@ -33,17 +33,27 @@ impl WitnessPin {
         Ok(WitnessPin { url, key })
     }
 
-    fn pk(&self) -> [u8; 32] {
+    fn pk(&self) -> Result<[u8; 32]> {
         hex::decode(&self.key)
             .ok()
             .and_then(|b| b.try_into().ok())
-            .expect("pinned witness key is 32 hex bytes")
+            .ok_or_else(|| anyhow!("pinned witness key is not 32 hex bytes"))
+    }
+
+    /// A pin from outside (a pairing) is checked before it is stored.
+    pub fn check(&self) -> Result<()> {
+        self.pk()?;
+        anyhow::ensure!(
+            self.url.starts_with("http://") || self.url.starts_with("https://"),
+            "witness URL must be http(s)"
+        );
+        Ok(())
     }
 
     fn checked(&self, body: &str, capsule: Hash) -> Result<Signed> {
         let s: Signed = serde_json::from_str(body).context("witness sent garbage")?;
         anyhow::ensure!(
-            s.verify(&self.pk()),
+            s.verify(&self.pk()?),
             "witness answer is not signed by the pinned key"
         );
         anyhow::ensure!(

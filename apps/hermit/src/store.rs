@@ -9,7 +9,7 @@ use anyhow::{bail, Context, Result};
 use hermit_kernel::hash::{cbor, from_cbor, Hash};
 use hermit_kernel::Manifest;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
 enum Backend {
@@ -28,6 +28,11 @@ const BLOBS: &str = "b";
 const MAX_MANIFEST: u64 = 1 << 20;
 /// Same ceiling the relay enforces on uploads.
 const MAX_BLOB: u64 = 256 << 20;
+
+/// Every name in a store is a hash: 64 lowercase hex digits.
+fn is_address(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
 
 /// Upper bound on an age ciphertext of `plain_len` bytes: 16 bytes of tag
 /// per 64 KiB chunk plus a header that grows with the recipient count.
@@ -66,18 +71,28 @@ impl Store {
 
     fn list(&self, kind: &str) -> Result<Vec<String>> {
         match &self.backend {
-            Backend::Dir(root) => fs::read_dir(root.join(kind))?
-                .map(|e| Ok(e?.file_name().to_string_lossy().into_owned()))
-                .collect(),
+            Backend::Dir(root) => {
+                let mut out = Vec::new();
+                for e in fs::read_dir(root.join(kind))? {
+                    let name = e?.file_name().to_string_lossy().into_owned();
+                    if is_address(&name) {
+                        out.push(name);
+                    }
+                }
+                Ok(out)
+            }
             Backend::Http(base) => {
                 let body = crate::net::agent()
                     .get(&format!("{base}/{kind}"))
                     .call()
                     .with_context(|| format!("listing {base}/{kind}"))?
                     .into_string()?;
+                // Anything that is not a content address is the provider's
+                // noise (or an attempt at a path); it never reaches a path
+                // or a slice.
                 Ok(body
                     .lines()
-                    .filter(|l| !l.is_empty())
+                    .filter(|l| is_address(l))
                     .map(str::to_string)
                     .collect())
             }
@@ -107,7 +122,7 @@ impl Store {
         if out.len() as u64 > max {
             bail!(
                 "provider served more than {max} bytes for {kind}/{}",
-                &name[..8.min(name.len())]
+                &name[..8]
             );
         }
         Ok(Some(out))
@@ -116,9 +131,19 @@ impl Store {
     fn put(&self, kind: &str, name: &str, bytes: &[u8]) -> Result<()> {
         match &self.backend {
             Backend::Dir(root) => {
-                let p = root.join(kind).join(name);
+                let dir = root.join(kind);
+                let p = dir.join(name);
                 if !p.exists() {
-                    fs::write(p, bytes)?;
+                    // Written aside and renamed, so a crash can never leave
+                    // a truncated file holding the true name.
+                    let mut tmp = tempfile::NamedTempFile::new_in(&dir)?;
+                    tmp.write_all(bytes)?;
+                    tmp.as_file().sync_all()?;
+                    if let Err(e) = tmp.persist_noclobber(&p) {
+                        if e.error.kind() != std::io::ErrorKind::AlreadyExists {
+                            return Err(e.error.into());
+                        }
+                    }
                 }
             }
             Backend::Http(base) => {
@@ -208,7 +233,7 @@ impl Store {
                     Err(e) => Some(e),
                 };
                 if let Some(why) = problem {
-                    eprintln!("  ✗ skipped {kind}/{}: {why}", &name[..8.min(name.len())]);
+                    eprintln!("  ✗ skipped {kind}/{}: {why}", &name[..8]);
                     continue;
                 }
                 self.put(kind, &name, &bytes)?;
@@ -243,5 +268,25 @@ mod tests {
         )
         .unwrap();
         assert!(store.list_manifests().is_err());
+    }
+
+    #[test]
+    fn only_content_addresses_are_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = Hash([7; 32]);
+        let store = Store::open(dir.path().to_str().unwrap(), cap).unwrap();
+        let h = store.put_blob(b"hello").unwrap();
+        let blobs = dir.path().join(cap.hex()).join(BLOBS);
+        for junk in [
+            "é".repeat(5),
+            "../x".into(),
+            "A".repeat(64),
+            ".tmpXYZ".into(),
+        ] {
+            let _ = fs::write(blobs.join(&junk), b"junk");
+        }
+        assert_eq!(store.list(BLOBS).unwrap(), vec![h.hex()]);
+        // Nothing but the content itself is left behind by a write.
+        assert_eq!(fs::read_dir(&blobs).unwrap().count(), 4);
     }
 }

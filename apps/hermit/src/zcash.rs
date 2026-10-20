@@ -9,6 +9,7 @@
 //! | (ours) labels/contacts      | `labels`         | Metadata |
 //! | fsblockdb cache             | dropped: re-derivable from the chain |
 
+use crate::home::write_private;
 use anyhow::{anyhow, Context, Result};
 use hermit_kernel::hash::{cbor, from_cbor};
 use hermit_kernel::{Anchor, Hash};
@@ -168,8 +169,12 @@ pub fn restore(bundle: &WalletBundle, mnemonic: Option<&str>, into: &Path) -> Re
         config.insert("mnemonic".into(), toml::Value::String(m.to_string()));
     }
     let (_, birthday) = network_and_birthday(&config)?;
-    fs::write(into.join("keys.toml"), toml::to_string(&config)?)?;
-    fs::write(into.join("data.sqlite"), &bundle.db)?;
+    // keys.toml may hold the mnemonic; neither file is anyone else's business.
+    write_private(
+        &into.join("keys.toml"),
+        toml::to_string(&config)?.as_bytes(),
+    )?;
+    write_private(&into.join("data.sqlite"), &bundle.db)?;
     init_block_cache(into)?;
 
     let conn = Connection::open(into.join("data.sqlite"))?;

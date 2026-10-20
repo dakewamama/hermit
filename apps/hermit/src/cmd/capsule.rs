@@ -76,7 +76,7 @@ pub fn create(
     }
     real.put_manifest(&g)?;
     Store::open(&home.replica(), g.body.capsule_id)?.pull_from(&real)?;
-    home.save_membership(&Membership {
+    home.new_membership(&Membership {
         capsule_id: g.body.capsule_id,
         genesis: g.id(),
         store,
@@ -129,7 +129,10 @@ pub fn join(home: &Home, pairing_arg: &str, store: Option<&str>) -> Result<()> {
         .context("the pairing names no provider; pass --store")?;
     let store = store::normalize_spec(store)?;
     home.keys()?;
-    home.save_membership(&Membership {
+    if let Some(w) = &p.witness {
+        w.check().context("the pairing carries a bad witness pin")?;
+    }
+    home.new_membership(&Membership {
         capsule_id: p.capsule_id,
         genesis: p.genesis,
         store,

@@ -67,11 +67,14 @@ pub fn export(
     for r in stmt.query_map([PRIORITY_SCANNED], |r| {
         Ok((r.get::<_, u32>(0)?, r.get::<_, u32>(1)?))
     })? {
+        // scan_queue ranges end exclusive; ZeWIF's are inclusive.
         let (start, end) = r?;
-        scanned.push(ScanRange::new(
-            BlockHeight::from(start),
-            BlockHeight::from(end),
-        ));
+        if end > start {
+            scanned.push(ScanRange::new(
+                BlockHeight::from(start),
+                BlockHeight::from(end - 1),
+            ));
+        }
     }
 
     let mut wallet = ZewifWallet::new(network);

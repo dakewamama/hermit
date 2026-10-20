@@ -67,6 +67,11 @@ fn devtool(e: &Env, wallet: &Path, args: &[&str]) -> String {
 /// Sync, then the set of transaction ids the wallet knows.
 fn synced_txids(e: &Env, wallet: &Path) -> BTreeSet<String> {
     devtool(e, wallet, &["sync", "-s", &e.server]);
+    txids(e, wallet)
+}
+
+/// The transaction ids the wallet knows right now, without touching the chain.
+fn txids(e: &Env, wallet: &Path) -> BTreeSet<String> {
     devtool(e, wallet, &["list-tx"])
         .lines()
         .map(str::trim)
@@ -116,8 +121,12 @@ fn device_to_device_and_app_to_app_carry_the_same_wallet() {
     );
 
     // Device to device.
-    let uri = hermit(&laptop, &["pair"]);
-    hermit(&phone, &["join", uri.trim()]);
+    let out = hermit(&laptop, &["pair"]);
+    let uri = out
+        .lines()
+        .find(|l| l.starts_with("hermit:"))
+        .expect("pair prints a hermit: URI");
+    hermit(&phone, &["join", uri]);
     let restored = t.join("restored");
     hermit(
         &phone,
@@ -132,6 +141,13 @@ fn device_to_device_and_app_to_app_carry_the_same_wallet() {
     assert_eq!(
         default_address(&e, &restored),
         default_address(&e, &e.wallet)
+    );
+    // The history arrived with the capsule: before any sync, the restored
+    // wallet already knows every transaction. A seed restore would know none.
+    assert_eq!(
+        txids(&e, &restored),
+        original,
+        "device to device, before sync"
     );
     assert_eq!(synced_txids(&e, &restored), original, "device to device");
 

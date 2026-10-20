@@ -71,7 +71,11 @@ pub fn adopt(document: &[u8], into: &Path) -> Result<Adopted> {
     if let Some(net) = heights {
         config.insert("activation_heights".into(), activation_table(&net).into());
     }
-    fs::write(into.join("keys.toml"), toml::to_string(&config)?)?;
+    crate::home::write_private(
+        &into.join("keys.toml"),
+        toml::to_string(&config)?.as_bytes(),
+    )?;
+    fs::set_permissions(&db, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
     zcash::init_block_cache(into)?;
     Ok(Adopted {
         network,
