@@ -8,6 +8,9 @@ wrote. Hermit moves the already-scanned state of a shielded wallet instead: seal
 an encrypted, signed capsule, verified on arrival, and resumed where the old device
 left off. The spend key stays behind unless you ask for it.
 
+**Try it:** https://hermit-demo-orpin.vercel.app. Step through a real wallet moving on a Zcash regtest
+chain, then attack a capsule yourself: Hermit's kernel runs in your browser, no install needed.
+
 ## What it does
 
 1. **Seal.** Takes a wallet's scanned database and its labels and seals each part
