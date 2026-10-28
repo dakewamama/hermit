@@ -137,7 +137,7 @@ Pass `--proxy socks5://127.0.0.1:9050` to send relay and witness traffic through
 
 | Command                                                      | What runs                                                     |
 | ------------------------------------------------------------ | ------------------------------------------------------------- |
-| `cargo test --workspace`                                     | 50 tests: 27 kernel, 14 CLI, 7 witness, 2 relay               |
+| `cargo test --workspace`                                     | 55 tests: 27 kernel, 14 CLI, 7 witness, 5 browser lab, 2 relay |
 | `cargo test -p hermit --test switching -- --ignored`         | Both switches against a real regtest chain (see below)        |
 | `cargo run -p hermit --example zewif_conformance -- <file>`  | Validates a ZeWIF export against the CDDL schema               |
 
