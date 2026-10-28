@@ -7,103 +7,169 @@
 <meta name="description" content="Hermit moves a shielded Zcash wallet between devices and apps without rescanning its history. Step through a real run, then attack a capsule yourself.">
 <style>
 :root {
-  --bg: #fbf8f1; --ink: #191919; --muted: #6b665d; --line: #e4ddcf; --panel: #f4efe4;
-  --term: #191919; --term-ink: #ece6d8; --term-dim: #9a9384;
-  --ok: #2e7d32; --bad: #b3261e; --warn: #8a6d00; --accent: #1f4fa8;
-  --mono: "DejaVu Sans Mono", "JetBrains Mono", Menlo, Consolas, monospace;
-  --sans: "DejaVu Sans", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --bg: #fbf8f1; --ink: #191919; --muted: #6b665d; --faint: #8f897c; --line: #e4ddcf; --panel: #f4efe4;
+  --raised: #fffdf8; --term: #1b1a18; --term-ink: #ece6d8; --term-dim: #9a9384;
+  --ok: #2e7d32; --ok-bg: #e6f2e4; --bad: #b3261e; --bad-bg: #f8e3e0; --warn: #8a6d00; --warn-bg: #f6ecd0;
+  --accent: #1f4fa8;
+  --mono: "JetBrains Mono", "DejaVu Sans Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --sans: "Inter", "DejaVu Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r: 10px;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--ink); }
 body { font: 16px/1.55 var(--sans); -webkit-font-smoothing: antialiased; }
 a { color: inherit; }
-.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px; }
-header { padding: 64px 0 40px; }
-.kicker { color: var(--muted); font-size: 15px; margin: 0 0 10px; }
-h1 { font-size: clamp(44px, 8vw, 92px); line-height: .95; letter-spacing: -.05em; margin: 0 0 22px; }
-.lede { font-size: 20px; max-width: 760px; margin: 0 0 22px; }
-.links { display: flex; gap: 18px; flex-wrap: wrap; font-size: 15px; }
-.links a { text-decoration: none; border-bottom: 1px solid var(--ink); }
-.facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line);
-  border: 1px solid var(--line); margin: 8px 0 72px; }
-.fact { background: var(--bg); padding: 22px 22px 20px; }
-.fact b { display: block; font-size: 40px; letter-spacing: -.04em; line-height: 1.05; }
-.fact span { color: var(--muted); font-size: 14.5px; }
-h2 { font-size: 34px; letter-spacing: -.03em; margin: 0 0 8px; }
-.sub { color: var(--muted); max-width: 780px; margin: 0 0 26px; }
-section { margin-bottom: 88px; }
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
 
-/* step-through replay */
-.replay > *, .lab > * { min-width: 0; }
-.replay { display: grid; grid-template-columns: 300px 1fr; gap: 28px; align-items: start; }
-.steps { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
-.steps button { all: unset; box-sizing: border-box; display: block; width: 100%; cursor: pointer;
-  padding: 13px 4px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 15.5px; }
-.steps button:hover { color: var(--ink); }
-.steps button[aria-current="step"] { color: var(--ink); font-weight: 700; }
-.steps button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.steps .n { display: inline-block; width: 26px; font-variant-numeric: tabular-nums; }
-.stage h3 { font-size: 24px; letter-spacing: -.02em; margin: 0 0 6px; }
-.stage p { margin: 0 0 16px; max-width: 760px; }
-.term { background: var(--term); color: var(--term-ink); border-radius: 10px; padding: 18px 20px;
-  font: 13px/1.45 var(--mono); overflow-x: auto; min-height: 220px; max-height: 620px; overflow-y: auto; }
-.term .l { white-space: pre; min-height: 1.45em; }
-.term .qr { line-height: 1; min-height: 1em; font-size: 9px; }
+/* ---------- controls ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px;
+  padding: 0 16px; border-radius: 8px; border: 1px solid var(--ink); background: var(--ink); color: var(--bg);
+  font: 600 14.5px/1 var(--sans); text-decoration: none; cursor: pointer; white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s, transform .05s; }
+.btn:hover { background: #333; border-color: #333; }
+.btn:active { transform: translateY(1px); }
+.btn.secondary { background: var(--raised); color: var(--ink); border-color: #cfc6b4; }
+.btn.secondary:hover { border-color: var(--ink); background: var(--raised); }
+.btn.sm { min-height: 34px; padding: 0 12px; font-size: 13.5px; }
+.btn:disabled { background: transparent; color: var(--faint); border-color: var(--line); cursor: not-allowed; transform: none; }
+.btn:focus-visible, .switch:focus-visible, .choice:focus-visible, .scenario:focus-visible, .step:focus-visible,
+input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; cursor: pointer;
+  font: 500 13px var(--sans); color: var(--muted); }
+.switch .track { width: 34px; height: 20px; border-radius: 999px; background: #d6cdbb; position: relative; transition: background .15s; }
+.switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+  border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch[aria-checked="true"] .track { background: var(--ink); }
+.switch[aria-checked="true"] .track::after { transform: translateX(14px); }
+
+/* ---------- header ---------- */
+header { padding: 72px 0 44px; }
+.kicker { color: var(--muted); font-size: 14.5px; margin: 0 0 14px; letter-spacing: .01em; }
+h1 { font-size: clamp(42px, 7.6vw, 88px); line-height: .96; letter-spacing: -.05em; margin: 0 0 24px; }
+.lede { font-size: 20px; max-width: 720px; margin: 0 0 28px; }
+.cta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.cta a.text { margin-left: 6px; font-size: 14.5px; color: var(--muted); }
+.facts { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: var(--r);
+  overflow: hidden; margin: 8px 0 88px; background: var(--raised); }
+.fact { padding: 24px; }
+.fact + .fact { border-left: 1px solid var(--line); }
+.fact b { display: block; font-size: 38px; letter-spacing: -.04em; line-height: 1.05; margin-bottom: 8px; }
+.fact span { color: var(--muted); font-size: 14.5px; }
+h2 { font-size: 34px; letter-spacing: -.03em; margin: 0 0 10px; }
+.sub { color: var(--muted); max-width: 760px; margin: 0 0 28px; }
+section { margin-bottom: 96px; }
+
+/* ---------- replay ---------- */
+.replay { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 32px; align-items: start; }
+.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; position: sticky; top: 20px; }
+.step { all: unset; box-sizing: border-box; display: flex; gap: 12px; align-items: center; width: 100%;
+  padding: 10px 12px; border-radius: 8px; cursor: pointer; color: var(--muted); font-size: 15px; }
+.step:hover { background: var(--panel); color: var(--ink); }
+.step .n { flex: 0 0 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+  font: 600 12.5px var(--sans); border: 1px solid #cfc6b4; color: var(--muted); }
+.step[aria-current="step"] { background: var(--panel); color: var(--ink); font-weight: 650; }
+.step[aria-current="step"] .n { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+.step.done .n { border-color: var(--ink); color: var(--ink); }
+.stage h3 { font-size: 24px; letter-spacing: -.02em; margin: 0 0 8px; }
+.stage p { margin: 0 0 18px; max-width: 720px; }
+.term { background: var(--term); color: var(--term-ink); border-radius: var(--r); padding: 18px 20px 20px;
+  font: 12.5px/1.5 var(--mono); min-height: 260px; box-shadow: 0 1px 0 rgba(0,0,0,.04), 0 8px 24px rgba(40,30,10,.08); }
+.term .bar { display: flex; gap: 6px; margin: 0 0 14px; }
+.term .bar i { width: 10px; height: 10px; border-radius: 50%; background: #3a3833; }
+.term .l { white-space: pre-wrap; overflow-wrap: anywhere; min-height: 1.5em; }
+.term .qr { white-space: pre; line-height: 1; min-height: 1em; font-size: 7.5px; letter-spacing: 0; }
 .term .b { font-weight: 700; color: #fff; }
 .term .d { color: var(--term-dim); }
 .term .g { color: #8fd18f; } .term .y { color: #e6c35c; } .term .r { color: #f08a80; }
-.nav { display: flex; gap: 10px; align-items: center; margin-top: 14px; color: var(--muted); font-size: 14px; }
-.btn { font: 600 14px var(--sans); background: var(--ink); color: var(--bg); border: 0; border-radius: 7px;
-  padding: 9px 14px; cursor: pointer; }
-.btn.ghost { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
-.btn:disabled { opacity: .35; cursor: default; }
-.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.note { font-size: 13.5px; color: var(--muted); margin-top: 10px; }
+.nav { display: flex; gap: 10px; align-items: center; margin-top: 16px; }
+.nav .pos { color: var(--muted); font-size: 14px; margin-left: 6px; }
+.note { font-size: 13.5px; color: var(--muted); margin-top: 14px; max-width: 720px; }
 
-/* live lab */
-.tries { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 22px; }
-.lab { display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 16px; align-items: start; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-.card h4 { margin: 0 0 2px; font-size: 18px; display: flex; justify-content: space-between; align-items: center; }
-.card .meta { color: var(--muted); font-size: 13px; margin: 0 0 12px; font-family: var(--mono); }
-.row { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
-.row input { flex: 1 1 90px; min-width: 0; font: 14px var(--mono); padding: 7px 8px; border: 1px solid #cfc6b4;
-  border-radius: 6px; background: var(--bg); color: var(--ink); }
-.small { font-size: 13px; padding: 7px 10px; }
-.toggle { font-size: 13px; color: var(--muted); display: flex; gap: 6px; align-items: center; cursor: pointer; }
-.labels { font: 13px/1.5 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
-  padding: 8px 10px; min-height: 40px; margin-top: 4px; white-space: pre-wrap; word-break: break-all; }
-.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
-.modes button { font: 13px var(--sans); text-align: left; padding: 8px 10px; border-radius: 7px; cursor: pointer;
-  border: 1px solid #cfc6b4; background: var(--bg); color: var(--ink); }
-.modes button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
-.modes button small { display: block; opacity: .7; font-size: 11.5px; }
-.ledger { font: 12px/1.45 var(--mono); max-height: 300px; overflow: auto; background: var(--bg);
-  border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; }
-.ledger .m { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+/* ---------- lab ---------- */
+.scenarios { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0 0 12px; }
+.scenario { all: unset; box-sizing: border-box; cursor: pointer; padding: 14px 14px 13px; border-radius: var(--r);
+  background: var(--raised); border: 1px solid var(--line); transition: border-color .15s, box-shadow .15s; }
+.scenario:hover { border-color: var(--ink); box-shadow: 0 4px 14px rgba(40,30,10,.07); }
+.scenario[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.scenario b { display: block; font-size: 14.5px; margin-bottom: 4px; }
+.scenario span { display: block; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.labbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 22px;
+  color: var(--muted); font-size: 13.5px; flex-wrap: wrap; }
+.lab { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+.card .top { display: flex; justify-content: space-between; align-items: center; margin: 0 0 4px; }
+.card h4 { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+.card .meta { color: var(--muted); font-size: 12.5px; margin: 0 0 14px; font-family: var(--mono); }
+.badge { display: inline-flex; align-items: center; gap: 6px; font: 600 12px/1 var(--sans); padding: 6px 9px;
+  border-radius: 999px; background: #ebe4d6; color: var(--muted); margin: 0 0 14px; }
+.badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.bad { background: var(--bad-bg); color: var(--bad); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.field { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.field input { min-width: 0; font: 13.5px var(--mono); padding: 0 10px; height: 36px; border: 1px solid #cfc6b4;
+  border-radius: 7px; background: var(--raised); color: var(--ink); }
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+.actions .btn { width: 100%; }
+.actions .wide { grid-column: 1 / -1; }
+.sectionlabel { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 600; margin: 16px 0 6px; }
+.labels { font: 12.5px/1.6 var(--mono); background: var(--raised); border: 1px solid var(--line); border-radius: 7px;
+  padding: 9px 11px; min-height: 42px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.labels.empty { color: var(--faint); }
+.choices { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px; }
+.choice { all: unset; box-sizing: border-box; cursor: pointer; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid #cfc6b4; background: var(--raised); font: 600 13.5px var(--sans); }
+.choice small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.choice:hover { border-color: var(--ink); }
+.choice[aria-checked="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.choice[aria-checked="true"] small { color: #cfc8b8; }
+.choice.lie[aria-checked="true"] { background: var(--bad); border-color: var(--bad); }
+.choice.lie[aria-checked="true"] small { color: #f6d5d1; }
+.ledger { font: 12px/1.5 var(--mono); background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 4px 11px; }
+.ledger .m { padding: 8px 0; border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
 .ledger .m:last-child { border-bottom: 0; }
-.ledger .k { color: var(--muted); }
-.cipher { font: 11px/1.35 var(--mono); color: var(--muted); white-space: pre-wrap; word-break: break-all;
-  margin-top: 8px; max-height: 92px; overflow: hidden; }
-.log { margin-top: 18px; background: var(--term); color: var(--term-ink); border-radius: 10px; padding: 14px 18px;
-  font: 13px/1.5 var(--mono); max-height: 320px; overflow: auto; }
-.log div { white-space: pre-wrap; }
+.ledger .k { color: var(--faint); }
+.ledger .more { color: var(--faint); padding: 8px 0; }
+.cipher { font: 11.5px/1.45 var(--mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 10px; }
+.log { margin-top: 18px; background: var(--term); color: var(--term-ink); border-radius: var(--r); padding: 16px 20px;
+  font: 12.5px/1.55 var(--mono); min-height: 120px; }
+.log div { white-space: pre-wrap; overflow-wrap: anywhere; }
 .log .ok { color: #8fd18f; } .log .bad { color: #f08a80; } .log .warn { color: #e6c35c; }
 .log .say { color: var(--term-dim); }
 .log .who { color: #fff; font-weight: 700; }
-.honest { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+.log .title { color: #fff; font-weight: 700; margin-bottom: 6px; }
+.log .older { color: var(--term-dim); font-style: italic; }
+
+.honest { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.honest .card h4 { margin-bottom: 10px; }
 .honest ul { margin: 0; padding-left: 18px; }
-.honest li { margin-bottom: 6px; }
-footer { border-top: 1px solid var(--line); padding: 26px 0 60px; color: var(--muted); font-size: 14px; }
-@media (max-width: 900px) {
-  .replay, .lab, .honest { grid-template-columns: 1fr; }
-  .facts { grid-template-columns: 1fr; }
-  .steps { display: flex; overflow-x: auto; border: 0; gap: 4px; }
-  .steps li { flex: 0 0 auto; }
-  .steps button { border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; white-space: nowrap; }
+.honest li { margin-bottom: 8px; }
+footer { border-top: 1px solid var(--line); padding: 28px 0 64px; color: var(--muted); font-size: 14px; }
+footer a { color: var(--ink); }
+
+@media (max-width: 1000px) {
+  .scenarios { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lab { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .lab .relay { grid-column: 1 / -1; order: 3; }
 }
-@media (max-width: 520px) { .wrap { padding: 0 16px; } header { padding-top: 40px; } .lede { font-size: 18px; } }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+@media (max-width: 860px) {
+  .replay, .honest { grid-template-columns: minmax(0, 1fr); }
+  .steps { position: static; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .step { padding: 8px; font-size: 13.5px; }
+  .facts { grid-template-columns: 1fr; }
+  .fact + .fact { border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 640px) {
+  .wrap { padding: 0 16px; }
+  header { padding: 44px 0 32px; }
+  .lede { font-size: 18px; }
+  .lab, .scenarios { grid-template-columns: minmax(0, 1fr); }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .term { padding: 14px; font-size: 11.5px; }
+  .term .qr { font-size: 5.5px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
@@ -113,39 +179,39 @@ footer { border-top: 1px solid var(--line); padding: 26px 0 60px; color: var(--m
   <h1>Wallets are shells.<br>Your state moves on.</h1>
   <p class="lede">A seed phrase recovers keys, not a wallet. Hermit moves a shielded Zcash wallet between
     devices and apps without rescanning its history: sealed, signed, and verified on arrival.</p>
-  <div class="links">
-    <a href="https://github.com/dakewamama/hermit">Source on GitHub</a>
-    <a href="#replay">Step through a real run</a>
-    <a href="#lab">Attack a capsule yourself</a>
+  <div class="cta">
+    <a class="btn" href="#replay">Watch a real wallet move</a>
+    <a class="btn secondary" href="#lab">Attack a capsule yourself</a>
+    <a class="text" href="https://github.com/dakewamama/hermit">Source on GitHub →</a>
   </div>
 </header>
 
 <div class="facts">
-  <div class="fact"><b>245 s → 12 s</b><span>Full sync versus a Hermit restore and sync, on Zcash testnet.
+  <div class="fact"><b>245 s → 12 s</b><span>A full sync against a Hermit restore and sync on Zcash testnet:
     48 blocks left to scan instead of 112,788.</span></div>
   <div class="fact"><b>114 of 114</b><span>Transactions in a wallet adopted by Zcash's own importer
     through ZeWIF, with the same address and balance.</span></div>
-  <div class="fact"><b>0 mocks</b><span>Every result on this page comes from real wallets and real
-    chains, or from Hermit's own kernel running in your browser.</span></div>
+  <div class="fact"><b>Every lie caught</b><span>Hidden updates, corrupted or forged changes and a wallet
+    synced from a lying server are all refused.</span></div>
 </div>
 
 <section id="replay">
   <h2>A real wallet moves</h2>
-  <p class="sub">A shielded wallet on a Zcash regtest chain (Zebra and Zaino) pays a counterparty, moves to a
-    new phone, keeps spending there, then moves to another app. Step through what each command printed.</p>
+  <p class="sub">A shielded wallet on a Zcash regtest chain (Zebra and Zaino) pays someone, moves to a new
+    phone, keeps spending there, then moves to another app. Step through what each command printed.</p>
   <div class="replay">
     <ol class="steps" id="steps"></ol>
     <div class="stage">
       <h3 id="stitle"></h3>
       <p id="stext"></p>
-      <div class="term" id="term" aria-live="polite"></div>
+      <div class="term" aria-live="polite"><div class="bar"><i></i><i></i><i></i></div><div id="term"></div></div>
       <div class="nav">
-        <button class="btn ghost" id="prev">Previous</button>
-        <button class="btn" id="next">Next</button>
-        <span id="pos"></span>
+        <button class="btn secondary" id="prev">← Previous</button>
+        <button class="btn" id="next">Next step →</button>
+        <span class="pos" id="pos"></span>
       </div>
-      <p class="note">Recorded on <span id="rdate"></span> from one real run, unedited. A full Zcash wallet
-        needs a chain and a lightwalletd server, so it cannot run inside this page; the lab below can.</p>
+      <p class="note">Recorded on <span id="rdate"></span> from one real run; the output is unedited. A full Zcash
+        wallet needs a chain and a lightwalletd server, so it cannot run inside this page. The lab below can.</p>
     </div>
   </div>
 </section>
@@ -153,59 +219,65 @@ footer { border-top: 1px solid var(--line); padding: 26px 0 60px; color: var(--m
 <section id="lab">
   <h2>Attack a capsule yourself</h2>
   <p class="sub">This is Hermit's kernel compiled to WebAssembly: the same signing, sealing and verdict code the
-    command line runs. A laptop and a phone share a capsule through a relay you control. Make the relay lie and
-    watch the devices refuse it. There is no chain here, so the capsule carries labels instead of a wallet.</p>
-  <div class="tries" id="tries"></div>
+    command line runs. A laptop and a phone share a capsule through a relay you control. Pick an attack, or
+    drive the devices and the relay by hand. There is no chain here, so the capsule carries labels instead of a wallet.</p>
+  <div class="scenarios" id="scenarios"></div>
+  <div class="labbar">
+    <span>Every scenario starts from a fresh capsule: the laptop created it and authorized the phone.</span>
+    <button class="btn secondary sm" id="reset">Start over</button>
+  </div>
   <div class="lab">
     <div class="card" id="laptop"></div>
-    <div class="card">
-      <h4>Relay <span class="meta" id="wstate"></span></h4>
-      <p class="meta">untrusted storage: choose how it behaves</p>
-      <div class="modes" id="modes"></div>
-      <label class="toggle"><input type="checkbox" id="wit" checked> witness cosigns every head</label>
-      <p class="meta" style="margin:12px 0 6px">what the relay stores</p>
+    <div class="card relay">
+      <div class="top"><h4>Relay</h4><span class="badge warn" style="margin:0">untrusted</span></div>
+      <p class="meta" id="wstate">&nbsp;</p>
+      <div class="choices" id="modes" role="radiogroup" aria-label="How the relay behaves"></div>
+      <button class="switch" id="wit" role="switch" aria-checked="true"><span class="track"></span>
+        Witness cosigns every head</button>
+      <div class="sectionlabel">What the relay stores</div>
       <div class="ledger" id="ledger"></div>
       <div class="cipher" id="cipher"></div>
     </div>
     <div class="card" id="phone"></div>
   </div>
-  <div class="log" id="log" aria-live="polite"><div class="say">loading the kernel…</div></div>
+  <div class="log" id="log" aria-live="polite"><div class="say">Loading the kernel…</div></div>
 </section>
 
 <section>
-  <h2>What is real, and what is not</h2>
+  <h2>How it was tested, and its limits</h2>
   <div class="honest">
-    <ul>
-      <li>The replay is one real run on a regtest chain with real Zebra consensus and Orchard notes.</li>
+    <div class="card"><h4>Tested</h4><ul>
+      <li>The replay is one run on a regtest chain with real Zebra consensus and Orchard notes.</li>
       <li>The testnet numbers come from a 112,788-block testnet wallet, timed end to end.</li>
       <li>The ZeWIF result is from zcash_client_sqlite's own importer, unmodified.</li>
-      <li>The lab runs Hermit's kernel itself, compiled to WebAssembly. Keys are generated in your browser
-        and every section is really encrypted with age.</li>
-    </ul>
-    <ul>
+      <li>The lab runs Hermit's kernel itself. Keys are generated in your browser and every section is
+        really encrypted with age.</li>
+    </ul></div>
+    <div class="card"><h4>Limits</h4><ul>
       <li>Fast switching needs a wallet built on zcash_client_sqlite: Zallet, the mobile SDKs, zcash-devtool.</li>
       <li>Zallet has the ZeWIF importer but no command to import a file yet.</li>
       <li>Storage still sees device names and public keys, anchors, section names, padded sizes and timing.</li>
       <li>Revocation is forward-only: a revoked device keeps what it already decrypted.</li>
-    </ul>
+    </ul></div>
   </div>
 </section>
 </div>
 <footer><div class="wrap">Hermit is open source under MIT ·
   <a href="https://github.com/dakewamama/hermit">github.com/dakewamama/hermit</a> ·
-  <a href="https://github.com/dakewamama/hermit#run-it">run it yourself</a></div></footer>
+  <a href="https://github.com/dakewamama/hermit#run-it">Run it yourself</a></div></footer>
 
 <script type="module">
 import init, { Lab } from "./pkg/hermit_wasm.js";
 
 const $ = (id) => document.getElementById(id);
-const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
 /* ---------- replay ---------- */
 
 // Minimal SGR rendering: bold, dim and the few colors the run prints.
 function ansi(line) {
-  let out = "", cls = new Set();
+  let out = "";
+  const cls = new Set();
   for (const part of line.split(/(\x1b\[[0-9;]*m)/)) {
     const m = part.match(/^\x1b\[([0-9;]*)m$/);
     if (!m) {
@@ -232,7 +304,7 @@ let cur = 0, timer = null;
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 $("steps").innerHTML = run.steps.map((s, i) =>
-  `<li><button data-i="${i}"><span class="n">${i + 1}</span>${esc(s.title)}</button></li>`).join("");
+  `<li><button class="step" data-i="${i}"><span class="n">${i + 1}</span>${esc(s.title)}</button></li>`).join("");
 $("steps").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (b) show(+b.dataset.i);
@@ -243,26 +315,25 @@ function show(i) {
   const s = run.steps[cur];
   $("stitle").textContent = `${cur + 1}. ${s.title}`;
   $("stext").textContent = s.text;
-  $("pos").textContent = `${cur + 1} of ${run.steps.length}`;
+  $("pos").textContent = `Step ${cur + 1} of ${run.steps.length}`;
   $("prev").disabled = cur === 0;
   $("next").disabled = cur === run.steps.length - 1;
-  document.querySelectorAll("#steps button").forEach((b, j) =>
-    j === cur ? b.setAttribute("aria-current", "step") : b.removeAttribute("aria-current"));
-  const lines = s.output.split("\n").map((l) => {
-    const qr = /[█▀▄]/.test(l);
-    return `<div class="l${qr ? " qr" : ""}">${ansi(l) || " "}</div>`;
+  document.querySelectorAll(".step").forEach((b, j) => {
+    j === cur ? b.setAttribute("aria-current", "step") : b.removeAttribute("aria-current");
+    b.classList.toggle("done", j < cur);
   });
+  const lines = s.output.split("\n").map((l) =>
+    `<div class="l${/[█▀▄]/.test(l) ? " qr" : ""}">${ansi(l) || " "}</div>`);
   const term = $("term");
   clearInterval(timer);
-  term.scrollTop = 0;
   if (reduce) { term.innerHTML = lines.join(""); return; }
   term.innerHTML = "";
   let k = 0;
   timer = setInterval(() => {
-    term.insertAdjacentHTML("beforeend", lines.slice(k, k + 2).join(""));
-    k += 2;
+    term.insertAdjacentHTML("beforeend", lines.slice(k, k + 3).join(""));
+    k += 3;
     if (k >= lines.length) clearInterval(timer);
-  }, 28);
+  }, 24);
 }
 $("prev").onclick = () => show(cur - 1);
 $("next").onclick = () => show(cur + 1);
@@ -273,64 +344,89 @@ show(0);
 await init();
 let lab;
 const log = $("log");
-function say(text, cls = "say") {
-  log.insertAdjacentHTML("beforeend", `<div class="${cls}">${esc(text)}</div>`);
-  log.scrollTop = log.scrollHeight;
+const MAX_LOG = 40;
+const last = {};       // the most recent verdict each device saw
+
+function line(html) {
+  log.insertAdjacentHTML("beforeend", html);
+  while (log.children.length > MAX_LOG) log.removeChild(log.firstChild);
 }
+function say(text, cls = "say") { line(`<div class="${cls}">${esc(text)}</div>`); }
+
 function act(who, what, res) {
   const r = JSON.parse(res);
   const cls = { ok: "ok", write: "ok", fork: "warn", info: "say" }[r.kind] || "bad";
-  log.insertAdjacentHTML("beforeend",
-    `<div><span class="who">${esc(who)}</span> <span class="say">${esc(what)}</span></div>`);
+  line(`<div><span class="who">${esc(who)}</span> <span class="say">${esc(what)}</span></div>`);
   say(`  ${r.text}${r.code !== undefined && !r.ok ? `  (exit ${r.code})` : ""}`, cls);
   for (const x of r.rejected || []) say(`  ${x}`, "bad");
+  if (["ok", "rollback", "fork", "conflict", "diverged", "empty"].includes(r.kind)) {
+    last[who] = { kind: r.kind, rejected: (r.rejected || []).length };
+  } else if (r.kind === "write" && /merged|resolve/.test(r.text)) {
+    last[who] = { kind: "ok", rejected: 0 };
+  }
   render();
   return r;
 }
 
+const BADGES = {
+  ok: ["ok", "In sync"], rollback: ["bad", "Rollback refused"], fork: ["warn", "Fork: can merge"],
+  conflict: ["bad", "Conflict: needs a decision"], diverged: ["bad", "Diverged history refused"],
+  empty: ["bad", "No valid state"],
+};
+
 const MODES = [
-  ["honest", "Honest", "serves everything"],
-  ["hide", "Hide newest", "withholds the latest change"],
-  ["corrupt", "Corrupt", "flips a byte in the latest"],
-  ["forge", "Forge", "adds a change under its own key"],
+  ["honest", "Honest", "Serves everything"],
+  ["hide", "Hide newest", "Withholds the latest change"],
+  ["corrupt", "Corrupt", "Flips a byte in the latest"],
+  ["forge", "Forge", "Adds a change under its own key"],
 ];
 $("modes").innerHTML = MODES.map(([m, t, d]) =>
-  `<button data-m="${m}" aria-pressed="${m === "honest"}">${t}<small>${d}</small></button>`).join("");
-let mode = "honest";
+  `<button class="choice${m === "honest" ? "" : " lie"}" role="radio" data-m="${m}" aria-checked="${m === "honest"}">${t}<small>${d}</small></button>`).join("");
 function setMode(m, quiet) {
-  mode = m;
   lab.set_mode(m);
-  document.querySelectorAll("#modes button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.m === m));
-  if (!quiet) say(`relay is now: ${m}`, m === "honest" ? "say" : "warn");
+  document.querySelectorAll(".choice").forEach((b) => b.setAttribute("aria-checked", b.dataset.m === m));
+  if (!quiet) say(`relay now: ${MODES.find((x) => x[0] === m)[1].toLowerCase()}`, m === "honest" ? "say" : "warn");
   render();
 }
 $("modes").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setMode(b.dataset.m); });
-$("wit").onchange = (e) => {
-  lab.set_witness(e.target.checked);
-  say(e.target.checked ? "devices consult the witness again" : "devices ignore the witness", "warn");
+$("wit").onclick = () => {
+  const on = $("wit").getAttribute("aria-checked") !== "true";
+  $("wit").setAttribute("aria-checked", on);
+  lab.set_witness(on);
+  say(on ? "devices consult the witness again" : "devices ignore the witness", "warn");
 };
 
 function deviceCard(name, other, authority) {
-  const el = $(name);
+  const el = $(name), title = name[0].toUpperCase() + name.slice(1);
+  const [k, v] = name === "laptop" ? ["tx:rent", "October"] : ["contact:bob", "u1bob"];
   el.innerHTML = `
-    <h4>${name[0].toUpperCase() + name.slice(1)}
-      <label class="toggle"><input type="checkbox" data-off> offline</label></h4>
-    <p class="meta" data-hwm></p>
-    <div class="row"><input data-k placeholder="label" value="${name === "laptop" ? "tx:rent" : "contact:bob"}" aria-label="label key">
-      <input data-v placeholder="value" value="${name === "laptop" ? "October" : "u1bob"}" aria-label="label value"></div>
-    <div class="row"><button class="btn small" data-a="label">Write label</button>
-      <button class="btn ghost small" data-a="check">Check relay</button></div>
-    <div class="row"><button class="btn ghost small" data-a="merge">Merge fork</button>
-      <button class="btn ghost small" data-a="resolve">Resolve conflict</button></div>
-    <div class="row"><button class="btn ghost small" data-a="auth">${authority}</button></div>
-    <p class="meta" style="margin:10px 0 2px">labels this device can decrypt</p>
+    <div class="top"><h4>${title}</h4>
+      <button class="switch" role="switch" aria-checked="false" data-off><span class="track"></span>Offline</button></div>
+    <p class="meta" data-hwm>&nbsp;</p>
+    <span class="badge" data-badge>Not checked yet</span>
+    <div class="field"><input data-k value="${k}" aria-label="${title} label name">
+      <input data-v value="${v}" aria-label="${title} label value"></div>
+    <div class="actions">
+      <button class="btn sm" data-a="label">Write label</button>
+      <button class="btn secondary sm" data-a="check">Check relay</button>
+      <button class="btn secondary sm" data-a="merge">Merge fork</button>
+      <button class="btn secondary sm" data-a="resolve">Resolve conflict</button>
+      <button class="btn secondary sm wide" data-a="auth">${authority}</button>
+    </div>
+    <div class="sectionlabel">Labels it can decrypt</div>
     <div class="labels" data-labels></div>`;
   el.addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-a]");
-    if (!b) return;
-    const k = el.querySelector("[data-k]").value.trim(), v = el.querySelector("[data-v]").value.trim();
+    const b = e.target.closest("button");
+    if (!b || b.disabled) return;
+    if (b.hasAttribute("data-off")) {
+      const off = b.getAttribute("aria-checked") !== "true";
+      act(name, off ? "goes offline" : "comes back online", lab.set_offline(name, off));
+      return;
+    }
+    const kk = el.querySelector("[data-k]").value.trim() || "note";
+    const vv = el.querySelector("[data-v]").value.trim() || "-";
     ({
-      label: () => act(name, `label ${k} = ${v}`, lab.label(name, k || "note", v || "-")),
+      label: () => act(name, `writes label ${kk} = ${vv}`, lab.label(name, kk, vv)),
       check: () => act(name, "checks the relay", lab.check(name)),
       merge: () => act(name, "merges", lab.merge(name)),
       resolve: () => act(name, "resolves the conflict", lab.resolve(name)),
@@ -339,95 +435,107 @@ function deviceCard(name, other, authority) {
         : act(name, `revokes the ${other}`, lab.revoke(name, other)),
     })[b.dataset.a]();
   });
-  el.querySelector("[data-off]").onchange = (e) =>
-    act(name, e.target.checked ? "goes offline" : "comes back online", lab.set_offline(name, e.target.checked));
 }
 
 function render() {
   for (const name of ["laptop", "phone"]) {
     const d = JSON.parse(lab.device_view(name)), el = $(name);
-    el.querySelector("[data-hwm]").textContent = `accepted: ${d.hwm ?? "nothing"}`;
-    el.querySelector("[data-off]").checked = d.offline;
-    el.querySelector("[data-labels]").textContent = d.labels === null
-      ? "(sealed: this device is no longer a recipient)"
-      : d.labels.length ? d.labels.map(([k, v]) => `${k} = ${v}`).join("\n") : "(none yet)";
+    el.querySelector("[data-hwm]").textContent = `accepted ${d.hwm ?? "nothing"}`;
+    el.querySelector("[data-off]").setAttribute("aria-checked", d.offline);
+    const l = last[name], badge = el.querySelector("[data-badge]");
+    const [cls, text] = l ? BADGES[l.kind] : ["", "Not checked yet"];
+    badge.className = `badge ${cls}`;
+    badge.textContent = d.offline ? "Offline: working locally" : text + (l && l.kind === "ok" && l.rejected
+      ? ` · ${l.rejected} forged change rejected` : "");
+    el.querySelector('[data-a="merge"]').disabled = !(l && l.kind === "fork");
+    el.querySelector('[data-a="resolve"]').disabled = !(l && l.kind === "conflict");
+    const box = el.querySelector("[data-labels]");
+    box.classList.toggle("empty", !(d.labels && d.labels.length));
+    box.textContent = d.labels === null ? "Sealed: this device is no longer a recipient"
+      : d.labels && d.labels.length ? d.labels.map(([a, b]) => `${a} = ${b}`).join("\n") : "None yet";
   }
   const r = JSON.parse(lab.relay_view());
-  $("wstate").textContent = r.witness ? `witness: ${r.witness}` : "";
-  $("ledger").innerHTML = r.manifests.slice().reverse().map((m) => `<div class="m">
-    <b>S${m.seq} ${m.id}</b> <span class="k">parents</span> ${m.parents.join(", ") || "none"}
-    <br><span class="k">author</span> ${m.author}… <span class="k">devices</span> ${m.devices.join(", ")}
+  $("wstate").textContent = r.witness ? `witness has cosigned ${r.witness}` : "no witness";
+  const ms = r.manifests.slice().reverse(), shown = ms.slice(0, 3);
+  $("ledger").innerHTML = shown.map((m) => `<div class="m">
+    <b>S${m.seq} ${m.id}</b> <span class="k">after</span> ${m.parents.join(", ") || "nothing"}
+    <br><span class="k">signed by</span> ${m.author}… <span class="k">devices</span> ${m.devices.join(", ")}
     <br><span class="k">sections</span> ${m.sections.map(esc).join("; ")}
-    <br><span class="k">note</span> ${m.note}</div>`).join("");
-  $("cipher").textContent = r.sample ? `newest labels blob, first bytes:\n${r.sample}` : "";
+    <br><span class="k">note</span> ${m.note}</div>`).join("") +
+    (ms.length > shown.length ? `<div class="more">and ${ms.length - shown.length} earlier</div>` : "");
+  $("cipher").textContent = r.sample
+    ? `Newest labels blob, first bytes:\n${r.sample.split("\n").slice(0, 3).map((x) => x.slice(0, 64)).join("\n")}…` : "";
 }
 
-function fresh(quiet) {
+function fresh() {
   lab = new Lab();
+  for (const k of Object.keys(last)) delete last[k];
   setMode("honest", true);
-  $("wit").checked = true;
+  $("wit").setAttribute("aria-checked", "true");
+  document.querySelectorAll(".scenario").forEach((b) => b.setAttribute("aria-pressed", "false"));
   log.innerHTML = "";
-  if (!quiet) say("new capsule: the laptop created it and authorized the phone; the tablet is not authorized");
   render();
 }
 
 deviceCard("laptop", "phone", "Authorize the tablet");
 deviceCard("phone", "laptop", "Revoke the laptop");
 
-const TRIES = [
-  ["Hide an update", () => {
-    act("laptop", "label tx:rent = October", lab.label("laptop", "tx:rent", "October"));
+const SCENARIOS = [
+  ["Hide an update", "The relay withholds the newest change.", () => {
+    act("laptop", "writes label tx:rent = October", lab.label("laptop", "tx:rent", "October"));
     act("phone", "checks the relay", lab.check("phone"));
-    act("laptop", "label tx:rent = November", lab.label("laptop", "tx:rent", "November"));
+    act("laptop", "writes label tx:rent = November", lab.label("laptop", "tx:rent", "November"));
     setMode("hide");
     act("phone", "checks the relay", lab.check("phone"));
-    say("the witness cosigned the laptop's newest head, so the phone knows it exists and refuses the stale copy");
+    say("The witness cosigned the laptop's newest head, so the phone knows it exists and refuses the stale copy.");
   }],
-  ["Corrupt a change", () => {
-    act("laptop", "label tx:rent = October", lab.label("laptop", "tx:rent", "October"));
+  ["Corrupt a change", "The relay flips one byte.", () => {
+    act("laptop", "writes label tx:rent = October", lab.label("laptop", "tx:rent", "October"));
     act("phone", "checks the relay", lab.check("phone"));
-    act("laptop", "label tx:fee = 0.0001", lab.label("laptop", "tx:fee", "0.0001"));
+    act("laptop", "writes label tx:fee = 0.0001", lab.label("laptop", "tx:fee", "0.0001"));
     setMode("corrupt");
     act("phone", "checks the relay", lab.check("phone"));
-    say("the flipped byte breaks the laptop's signature; the phone rejects the change and still knows it is missing");
+    say("The flipped byte breaks the laptop's signature. The phone rejects the change and still knows it is missing.");
   }],
-  ["Forge a device", () => {
-    act("laptop", "label tx:rent = October", lab.label("laptop", "tx:rent", "October"));
+  ["Forge a device", "The relay signs a change with its own key.", () => {
+    act("laptop", "writes label tx:rent = October", lab.label("laptop", "tx:rent", "October"));
     setMode("forge");
     act("phone", "checks the relay", lab.check("phone"));
-    say("the relay signed a change that adds its own key; no authorized device signed it, so it is rejected");
+    say("No authorized device signed the relay's change, so the phone rejects it and keeps the real head.");
   }],
-  ["Edit offline, then merge", () => {
+  ["Edit offline", "Both devices change labels apart, then merge.", () => {
     act("phone", "goes offline", lab.set_offline("phone", true));
-    act("laptop", "label contact:alice = u1alice", lab.label("laptop", "contact:alice", "u1alice"));
-    act("phone", "label contact:bob = u1bob", lab.label("phone", "contact:bob", "u1bob"));
+    act("laptop", "writes label contact:alice = u1alice", lab.label("laptop", "contact:alice", "u1alice"));
+    act("phone", "writes label contact:bob = u1bob", lab.label("phone", "contact:bob", "u1bob"));
     act("phone", "comes back online", lab.set_offline("phone", false));
     act("phone", "checks the relay", lab.check("phone"));
     act("phone", "merges", lab.merge("phone"));
     act("laptop", "checks the relay", lab.check("laptop"));
-    say("only labels changed on both sides, so they merge per key without asking anyone");
+    say("Only labels changed on both sides, so they merge per key without asking anyone.");
   }],
-  ["Fight over authority", () => {
+  ["Fight over authority", "Two devices change who is in charge.", () => {
     act("phone", "goes offline", lab.set_offline("phone", true));
     act("laptop", "authorizes the tablet", lab.authorize("laptop", "tablet"));
     act("phone", "revokes the laptop", lab.revoke("phone", "laptop"));
     act("phone", "comes back online", lab.set_offline("phone", false));
     act("phone", "checks the relay", lab.check("phone"));
-    act("phone", "tries to merge", lab.merge("phone"));
-    say("who may write changed on both branches at once; Hermit refuses to guess. Press Resolve conflict on the phone.");
+    say("Who may write changed on both branches at once, so Hermit refuses to guess. Press Resolve conflict on the phone.");
   }],
 ];
-$("tries").innerHTML = TRIES.map(([t], i) => `<button class="btn ghost" data-t="${i}">${t}</button>`).join("") +
-  `<button class="btn ghost" data-t="reset">Start over</button>`;
-$("tries").addEventListener("click", (e) => {
+$("scenarios").innerHTML = SCENARIOS.map(([t, d], i) =>
+  `<button class="scenario" data-t="${i}" aria-pressed="false"><b>${t}</b><span>${d}</span></button>`).join("");
+$("scenarios").addEventListener("click", (e) => {
   const b = e.target.closest("button");
   if (!b) return;
-  fresh(true);
-  if (b.dataset.t === "reset") { say("new capsule"); return; }
-  say(`— ${TRIES[+b.dataset.t][0]} —`, "who");
-  TRIES[+b.dataset.t][1]();
+  fresh();
+  b.setAttribute("aria-pressed", "true");
+  const [t, , play] = SCENARIOS[+b.dataset.t];
+  line(`<div class="title">${esc(t)}</div>`);
+  play();
 });
+$("reset").onclick = () => { fresh(); say("New capsule: the laptop created it and authorized the phone."); };
 fresh();
+say("New capsule: the laptop created it and authorized the phone. Pick an attack above, or use the controls.");
 </script>
 </body>
 </html>
